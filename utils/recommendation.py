@@ -128,52 +128,52 @@ def _build_explanation(ticker, final_rec, ret_pct, sentiment_score,
 
     # Deskripsi komponen
     ret_desc = (
-        f"Prediksi return saham ini sebesar **{ret_pct:.1f}%**"
+        f"Prediksi return saham ini sebesar <strong>{ret_pct:.1f}%</strong>"
     )
     if ret_pct >= 7:
-        ret_desc += ", yang tergolong **menarik**"
+        ret_desc += ", yang tergolong <strong>menarik</strong>"
     elif ret_pct >= 3:
-        ret_desc += ", yang tergolong **cukup**"
+        ret_desc += ", yang tergolong <strong>cukup</strong>"
     else:
-        ret_desc += ", yang tergolong **rendah atau tidak menarik**"
+        ret_desc += ", yang tergolong <strong>rendah atau tidak menarik</strong>"
 
     # Deskripsi sentimen
     if sentiment_score >= 0.1:
-        sent_desc = "Sentimen berita terkini cenderung **positif**, mencerminkan ekspektasi pasar yang optimis"
+        sent_desc = "Sentimen berita terkini cenderung <strong>positif</strong>, mencerminkan ekspektasi pasar yang optimis"
     elif sentiment_score <= -0.1:
-        sent_desc = "Sentimen berita terkini cenderung **negatif**, yang mengindikasikan tekanan atau risiko pasar"
+        sent_desc = "Sentimen berita terkini cenderung <strong>negatif</strong>, yang mengindikasikan tekanan atau risiko pasar"
     else:
-        sent_desc = "Sentimen berita terkini bersifat **netral**, tidak ada sinyal kuat dari berita"
+        sent_desc = "Sentimen berita terkini bersifat <strong>netral</strong>, tidak ada sinyal kuat dari berita"
 
     # Deskripsi fundamental
     fund_label = fundamental_label if fundamental_label else (
         "Kuat" if fundamental_score >= 0.7 else
         "Cukup" if fundamental_score >= 0.5 else "Lemah"
     )
-    fund_desc = f"Kondisi fundamental perusahaan tergolong **{fund_label}** (skor: {fundamental_score:.2f})"
+    fund_desc = f"Kondisi fundamental perusahaan tergolong <strong>{fund_label}</strong> (skor: {fundamental_score:.2f})"
 
     # Kalimat rekomendasi
     if final_rec == "Jangka Panjang":
         rec_sentence = (
-            f"Berdasarkan analisis ini, **{ticker}** layak dipertimbangkan sebagai investasi "
-            f"**jangka panjang**. Kombinasi prediksi return yang menarik dan fundamental yang "
+            f"Berdasarkan analisis ini, <strong>{ticker}</strong> layak dipertimbangkan sebagai investasi "
+            f"<strong>jangka panjang</strong>. Kombinasi prediksi return yang menarik dan fundamental yang "
             f"kuat memberikan dasar yang solid."
         )
     elif final_rec == "Jangka Pendek":
         rec_sentence = (
-            f"**{ticker}** dapat dipertimbangkan untuk investasi **jangka pendek**, "
+            f"<strong>{ticker}</strong> dapat dipertimbangkan untuk investasi <strong>jangka pendek</strong>, "
             f"memanfaatkan momentum harga dan sentimen berita yang ada. Namun tetap perhatikan "
             f"risiko volatilitas jangka pendek."
         )
     elif final_rec == "Overhyped / Hindari":
         rec_sentence = (
-            f"Meskipun prediksi return **{ticker}** tampak tinggi, kondisi fundamental yang "
+            f"Meskipun prediksi return <strong>{ticker}</strong> tampak tinggi, kondisi fundamental yang "
             f"kurang kuat mengindikasikan bahwa kenaikan harga mungkin tidak didukung oleh "
-            f"kinerja nyata perusahaan (**Overhyped**). Disarankan untuk **berhati-hati**."
+            f"kinerja nyata perusahaan (<strong>Overhyped</strong>). Disarankan untuk <strong>berhati-hati</strong>."
         )
     else:  # Tidak Disarankan
         rec_sentence = (
-            f"Saat ini, **{ticker}** **tidak disarankan** untuk investasi berdasarkan "
+            f"Saat ini, <strong>{ticker}</strong> <strong>tidak disarankan</strong> untuk investasi berdasarkan "
             f"tujuan {investment_goal} Anda. Prediksi return yang rendah dan/atau kondisi "
             f"yang kurang mendukung membuat risiko lebih besar dari potensi keuntungan."
         )
@@ -181,7 +181,7 @@ def _build_explanation(ticker, final_rec, ret_pct, sentiment_score,
     downgrade_note = ""
     if downgraded:
         downgrade_note = (
-            "\n\n> ⚠️ **Catatan:** Rekomendasi diturunkan satu level karena sentimen "
+            "<br><br>⚠️ <strong>Catatan:</strong> Rekomendasi diturunkan satu level karena sentimen "
             "berita terkini sangat negatif."
         )
 

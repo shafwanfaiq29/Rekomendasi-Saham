@@ -1,717 +1,1381 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import joblib
 import os
+import time
+import joblib
+import feedparser
+import numpy as np
+import pandas as pd
+import yfinance as yf
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import streamlit as st
+from urllib.parse import quote
+from datetime import datetime
 
-from utils.fetch_stock import fetch_stock_data, fetch_gold_price
-from utils.fetch_news import fetch_news
-from utils.sentiment import analyze_sentiment
-from utils.feature_engineering import build_feature_row, calculate_technical_features, merge_gold_features
-from utils.recommendation import generate_recommendation
 
-# ─── CONFIG ────────────────────────────────────────────────────────────────────
+# ======================================================
+# PAGE CONFIG
+# ======================================================
+
 st.set_page_config(
     page_title="GoldStock Insight",
+    page_icon="🟡",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="collapsed"
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "models", "rf_model.pkl")
-FUNDAMENTAL_PATH = os.path.join(BASE_DIR, "data", "fundamental_clean.csv")
 
-TICKER_OPTIONS = ["ANTM", "MDKA", "BRMS"]
-GOAL_OPTIONS = ["Jangka Pendek", "Jangka Panjang"]
+# ======================================================
+# CUSTOM CSS
+# ======================================================
 
-REC_COLORS = {
-    "Jangka Panjang":      "#10B981", # Vibrant Emerald Green
-    "Jangka Pendek":       "#3B82F6", # Vibrant Blue
-    "Overhyped / Hindari": "#F59E0B", # Vibrant Amber
-    "Tidak Disarankan":    "#EF4444", # Vibrant Red
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+
+    .stApp {
+        background:
+            radial-gradient(circle at top left, rgba(212, 175, 55, 0.16), transparent 28%),
+            radial-gradient(circle at top right, rgba(255, 215, 0, 0.08), transparent 25%),
+            linear-gradient(135deg, #05070d 0%, #0b1020 45%, #05070d 100%);
+        color: #f8fafc;
+    }
+
+    header[data-testid="stHeader"] {
+        background: rgba(5, 7, 13, 0);
+    }
+
+    div[data-testid="stToolbar"] {
+        visibility: hidden;
+        height: 0%;
+        position: fixed;
+    }
+
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1280px;
+    }
+
+    .hero-container {
+        padding: 3.2rem 2.5rem;
+        border-radius: 32px;
+        background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),
+            linear-gradient(135deg, rgba(212, 175, 55, 0.12), rgba(0, 0, 0, 0));
+        border: 1px solid rgba(212, 175, 55, 0.28);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .hero-container::before {
+        content: "";
+        position: absolute;
+        top: -100px;
+        right: -100px;
+        width: 280px;
+        height: 280px;
+        background: radial-gradient(circle, rgba(255, 215, 0, 0.22), transparent 70%);
+        border-radius: 50%;
+    }
+
+    .premium-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(212, 175, 55, 0.12);
+        border: 1px solid rgba(212, 175, 55, 0.35);
+        color: #f7d774;
+        font-size: 0.82rem;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        margin-bottom: 1rem;
+    }
+
+    .hero-title {
+        font-size: clamp(2.4rem, 5vw, 4.8rem);
+        line-height: 1.02;
+        font-weight: 800;
+        letter-spacing: -0.06em;
+        margin-bottom: 1rem;
+        color: #ffffff;
+    }
+
+    .gold-text {
+        background: linear-gradient(135deg, #fff3b0 0%, #d4af37 40%, #b8860b 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+        font-size: 1.1rem;
+        line-height: 1.8;
+        color: #cbd5e1;
+        max-width: 760px;
+        margin-bottom: 1.5rem;
+    }
+
+    .hero-mini {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 1.2rem;
+    }
+
+    .mini-chip {
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.82);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        color: #e2e8f0;
+        font-size: 0.85rem;
+    }
+
+    .section-title {
+        font-size: 1.5rem;
+        font-weight: 800;
+        color: #ffffff;
+        margin: 1.2rem 0 0.4rem 0;
+        letter-spacing: -0.03em;
+    }
+
+    .section-caption {
+        color: #94a3b8;
+        font-size: 0.95rem;
+        margin-bottom: 1rem;
+    }
+
+    .glass-card {
+        padding: 1.3rem;
+        border-radius: 24px;
+        background: rgba(15, 23, 42, 0.72);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        box-shadow: 0 20px 45px rgba(0, 0, 0, 0.22);
+        backdrop-filter: blur(16px);
+        height: 100%;
+    }
+
+    .gold-card {
+        padding: 1.4rem;
+        border-radius: 26px;
+        background:
+            linear-gradient(135deg, rgba(212, 175, 55, 0.17), rgba(255, 255, 255, 0.04)),
+            rgba(15, 23, 42, 0.74);
+        border: 1px solid rgba(212, 175, 55, 0.35);
+        box-shadow: 0 25px 60px rgba(0, 0, 0, 0.28);
+        height: 100%;
+    }
+
+    .metric-label {
+        color: #94a3b8;
+        font-size: 0.82rem;
+        margin-bottom: 0.35rem;
+        font-weight: 600;
+    }
+
+    .metric-value {
+        color: #ffffff;
+        font-size: 1.45rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+    }
+
+    .metric-small {
+        color: #cbd5e1;
+        font-size: 0.86rem;
+        margin-top: 0.25rem;
+    }
+
+    .recommendation-title {
+        color: #f7d774;
+        font-size: 0.95rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        margin-bottom: 0.5rem;
+    }
+
+    .recommendation-main {
+        color: #ffffff;
+        font-size: clamp(2rem, 4vw, 3.6rem);
+        font-weight: 900;
+        letter-spacing: -0.06em;
+        line-height: 1;
+        margin-bottom: 0.6rem;
+    }
+
+    .recommendation-desc {
+        color: #cbd5e1;
+        font-size: 1rem;
+        line-height: 1.7;
+    }
+
+    .badge {
+        display: inline-flex;
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-weight: 800;
+        font-size: 0.8rem;
+        margin-top: 0.75rem;
+    }
+
+    .badge-green {
+        color: #bbf7d0;
+        background: rgba(34, 197, 94, 0.16);
+        border: 1px solid rgba(34, 197, 94, 0.35);
+    }
+
+    .badge-blue {
+        color: #bfdbfe;
+        background: rgba(59, 130, 246, 0.16);
+        border: 1px solid rgba(59, 130, 246, 0.35);
+    }
+
+    .badge-red {
+        color: #fecaca;
+        background: rgba(239, 68, 68, 0.16);
+        border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+
+    .badge-orange {
+        color: #fed7aa;
+        background: rgba(249, 115, 22, 0.16);
+        border: 1px solid rgba(249, 115, 22, 0.35);
+    }
+
+    .news-card {
+        padding: 1rem;
+        border-radius: 18px;
+        background: rgba(2, 6, 23, 0.42);
+        border: 1px solid rgba(148, 163, 184, 0.13);
+        margin-bottom: 0.8rem;
+        transition: 0.25s ease;
+    }
+
+    .news-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(212, 175, 55, 0.38);
+        background: rgba(15, 23, 42, 0.72);
+    }
+
+    .news-title {
+        color: #f8fafc;
+        font-weight: 700;
+        font-size: 0.96rem;
+        margin-bottom: 0.45rem;
+        line-height: 1.45;
+    }
+
+    .news-meta {
+        color: #94a3b8;
+        font-size: 0.78rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .news-link {
+        color: #f7d774 !important;
+        font-size: 0.84rem;
+        font-weight: 700;
+        text-decoration: none;
+    }
+
+    .step-box {
+        padding: 1rem;
+        border-radius: 20px;
+        background: rgba(15, 23, 42, 0.60);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        height: 100%;
+    }
+
+    .step-number {
+        width: 34px;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #f7d774, #b8860b);
+        color: #0f172a;
+        font-weight: 900;
+        margin-bottom: 0.8rem;
+    }
+
+    .step-title {
+        color: #ffffff;
+        font-weight: 800;
+        margin-bottom: 0.35rem;
+    }
+
+    .step-desc {
+        color: #94a3b8;
+        font-size: 0.9rem;
+        line-height: 1.6;
+    }
+
+    .disclaimer {
+        padding: 1rem 1.2rem;
+        border-radius: 20px;
+        background: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.22);
+        color: #fecaca;
+        font-size: 0.88rem;
+        line-height: 1.6;
+    }
+
+    .stButton > button {
+        width: 100%;
+        border: none;
+        border-radius: 18px;
+        padding: 0.85rem 1.2rem;
+        background: linear-gradient(135deg, #f7d774 0%, #d4af37 45%, #9a6b00 100%);
+        color: #0b1020;
+        font-weight: 900;
+        font-size: 1rem;
+        box-shadow: 0 14px 30px rgba(212, 175, 55, 0.25);
+        transition: 0.25s ease;
+    }
+
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 18px 45px rgba(212, 175, 55, 0.34);
+        color: #05070d;
+    }
+
+    div[data-baseweb="select"] > div {
+        background: rgba(15, 23, 42, 0.85);
+        border-color: rgba(212, 175, 55, 0.25);
+        border-radius: 16px;
+        color: #ffffff;
+    }
+
+    label {
+        color: #e2e8f0 !important;
+        font-weight: 700 !important;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 999px;
+        padding: 10px 18px;
+        background: rgba(15, 23, 42, 0.70);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        color: #cbd5e1;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background: rgba(212, 175, 55, 0.16);
+        border: 1px solid rgba(212, 175, 55, 0.40);
+        color: #f7d774;
+    }
+
+    @media (max-width: 768px) {
+        .hero-container {
+            padding: 2rem 1.3rem;
+            border-radius: 24px;
+        }
+        .glass-card, .gold-card {
+            padding: 1rem;
+        }
+        .recommendation-main {
+            font-size: 2rem;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ======================================================
+# CONFIG
+# ======================================================
+
+TICKER_MAP = {
+    "ANTM": "ANTM.JK",
+    "MDKA": "MDKA.JK",
+    "BRMS": "BRMS.JK"
 }
 
-# ─── CUSTOM CSS (ULTRA PREMIUM & DYNAMIC THEME) ────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
-
-html, body, [class*="css"], .stMarkdown, div, p, span, h1, h2, h3, h4, h5, h6 {
-    font-family: 'Plus Jakarta Sans', sans-serif !important;
+COMPANY_NAMES = {
+    "ANTM": "PT Aneka Tambang Tbk",
+    "MDKA": "PT Merdeka Copper Gold Tbk",
+    "BRMS": "PT Bumi Resources Minerals Tbk"
 }
 
-/* Hide Streamlit branding */
-#MainMenu, footer, header { visibility: hidden; }
-
-/* Dynamic Animated Background */
-@keyframes gradientBG {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
+NEWS_KEYWORDS = {
+    "ANTM": ["ANTM saham", "Antam emas", "Aneka Tambang saham", "ANTM emas"],
+    "MDKA": ["MDKA saham", "Merdeka Copper Gold saham", "MDKA emas"],
+    "BRMS": ["BRMS saham", "Bumi Resources Minerals saham", "BRMS emas"]
 }
 
-.stApp { 
-    background: linear-gradient(-45deg, #f8fafc, #e0f2fe, #fef9c3, #eff6ff);
-    background-size: 400% 400%;
-    animation: gradientBG 20s ease infinite;
-    color: #1E293B; 
-}
-
-/* Hero Section (Home) */
-.hero-container {
-    background: rgba(255, 255, 255, 0.4);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
-    border: 1px solid rgba(255, 255, 255, 0.9);
-    border-radius: 32px;
-    padding: 80px 40px;
-    text-align: center;
-    margin-bottom: 3rem;
-    box-shadow: 0 30px 60px -15px rgba(37, 99, 235, 0.15), inset 0 2px 20px rgba(255,255,255,0.8);
-}
-.hero-badge {
-    display: inline-block;
-    background: linear-gradient(135deg, #F59E0B, #FBBF24);
-    color: #FFFFFF;
-    font-size: 0.85rem;
-    font-weight: 800;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    padding: 10px 28px;
-    border-radius: 50px;
-    margin-bottom: 24px;
-    box-shadow: 0 8px 20px rgba(245, 158, 11, 0.4);
-}
-.hero-title {
-    font-size: 4.5rem;
-    font-weight: 800;
-    color: #0F172A;
-    line-height: 1.1;
-    margin-bottom: 24px;
-    letter-spacing: -1.5px;
-}
-.hero-title span { 
-    background: linear-gradient(135deg, #2563EB, #06B6D4);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-.hero-subtitle {
-    font-size: 1.25rem;
-    color: #475569;
-    max-width: 700px;
-    margin: 0 auto 30px;
-    line-height: 1.8;
-    font-weight: 500;
-}
-
-/* Feature Cards */
-.feature-card {
-    background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.8);
-    border-radius: 24px;
-    padding: 40px 24px;
-    text-align: center;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    height: 100%;
-    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05);
-}
-.feature-card:hover {
-    transform: translateY(-10px) scale(1.02);
-    box-shadow: 0 30px 40px -15px rgba(37, 99, 235, 0.15);
-    background: rgba(255, 255, 255, 0.85);
-    border-color: #BFDBFE;
-}
-.feature-icon-wrapper {
-    width: 72px;
-    height: 72px;
-    border-radius: 20px;
-    background: linear-gradient(135deg, #EFF6FF, #DBEAFE);
-    color: #2563EB;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.5rem;
-    font-weight: 800;
-    margin: 0 auto 24px;
-    box-shadow: inset 0 2px 4px rgba(255,255,255,0.8), 0 8px 16px rgba(37, 99, 235, 0.1);
-}
-
-/* Section Containers */
-.card {
-    background: rgba(255, 255, 255, 0.7);
-    backdrop-filter: blur(16px);
-    border: 1px solid rgba(255, 255, 255, 0.9);
-    border-radius: 24px;
-    padding: 32px;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 15px 35px -10px rgba(0, 0, 0, 0.05);
-}
-.card-gold {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.8) 100%);
-    backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 1);
-    border-radius: 24px;
-    padding: 36px;
-    margin-bottom: 2rem;
-    box-shadow: 0 20px 40px -10px rgba(37, 99, 235, 0.1), inset 0 0 0 1px rgba(255,255,255,0.5);
-}
-.section-title {
-    font-size: 1.25rem;
-    font-weight: 800;
-    color: #0F172A;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    margin-bottom: 24px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-.section-title::before {
-    content: '';
-    display: inline-block;
-    width: 28px;
-    height: 6px;
-    border-radius: 3px;
-    background: linear-gradient(90deg, #3B82F6, #06B6D4);
-}
-
-/* Recommendation badge */
-.rec-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    font-size: 1.6rem;
-    font-weight: 800;
-    padding: 18px 48px;
-    border-radius: 20px;
-    margin: 20px 0;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-}
-
-/* News table */
-.news-row {
-    background: rgba(255, 255, 255, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.9);
-    border-radius: 16px;
-    padding: 18px 24px;
-    margin-bottom: 14px;
-    transition: all 0.3s ease;
-}
-.news-row:hover { 
-    border-color: #93C5FD;
-    background: rgba(255, 255, 255, 0.9);
-    transform: translateX(6px);
-    box-shadow: 0 10px 20px -5px rgba(37, 99, 235, 0.1);
-}
-.news-title { color: #0F172A; font-size: 1.05rem; font-weight: 700; line-height: 1.5; }
-.news-meta { color: #64748B; font-size: 0.85rem; margin-top: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;}
-
-/* Fund metric box */
-.fund-box {
-    background: rgba(255, 255, 255, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.8);
-    border-radius: 20px;
-    padding: 24px;
-    text-align: center;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.fund-box:hover {
-    background: rgba(255, 255, 255, 0.9);
-    border-color: #BAE6FD;
-    transform: translateY(-5px);
-    box-shadow: 0 15px 30px -10px rgba(14, 165, 233, 0.15);
-}
-.fund-label { font-size: 0.8rem; color: #64748B; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; }
-.fund-value { font-size: 1.5rem; font-weight: 800; color: #0F172A; margin-top: 8px; }
-
-/* Divider */
-.gold-divider {
-    border: none;
-    border-top: 2px dashed #CBD5E1;
-    margin: 4rem 0;
-    opacity: 0.5;
-}
-
-/* Explanation box */
-.explanation-box {
-    background: linear-gradient(135deg, #F0FDF4, #FFFFFF);
-    border-left: 6px solid #10B981;
-    border-radius: 0 20px 20px 0;
-    padding: 28px 32px;
-    line-height: 1.9;
-    color: #166534;
-    font-size: 1.1rem;
-    font-weight: 600;
-    box-shadow: 0 10px 25px -5px rgba(22, 101, 52, 0.05);
-}
-
-/* FIXED Selectbox to prevent text cutoff */
-div[data-baseweb="select"] > div {
-    background: rgba(255, 255, 255, 0.8) !important; 
-    border: 2px solid #E2E8F0 !important; 
-    border-radius: 14px !important; 
-    color: #0F172A !important; 
-    box-shadow: 0 4px 10px -2px rgba(0, 0, 0, 0.05) !important;
-    transition: all 0.3s ease !important;
-    min-height: 48px !important; /* ensures height is sufficient */
-}
-div[data-baseweb="select"] > div:hover {
-    border-color: #3B82F6 !important;
-    background: #FFFFFF !important;
-}
-
-/* Beautiful Premium Button */
-.stButton > button {
-    background: linear-gradient(135deg, #2563EB, #06B6D4) !important;
-    color: #FFFFFF !important;
-    font-weight: 800 !important;
-    font-size: 1.1rem !important;
-    letter-spacing: 0.5px !important;
-    padding: 1rem 2.5rem !important;
-    border: none !important;
-    border-radius: 16px !important;
-    width: 100% !important;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
-    box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.4) !important;
-}
-.stButton > button:hover { 
-    transform: translateY(-4px) scale(1.02) !important; 
-    box-shadow: 0 20px 35px -10px rgba(6, 182, 212, 0.5) !important; 
-}
-.stButton > button p {
-    font-family: 'Plus Jakarta Sans', sans-serif !important;
-}
-</style>
-""", unsafe_allow_html=True)
+MODEL_FEATURES = [
+    "Open", "High", "Low", "Close", "Volume",
+    "Return", "MA7", "MA30", "Volatility",
+    "Gold_Close", "Gold_Return",
+    "Sentiment_Score", "News_Count",
+    "PER", "PBV", "EPS", "ROE", "DER",
+    "Current_Ratio", "Fundamental_Score"
+]
 
 
-# ─── HELPERS ───────────────────────────────────────────────────────────────────
+# ======================================================
+# HELPER COMPONENTS
+# ======================================================
 
-@st.cache_data(ttl=300)
-def load_fundamental():
-    if not os.path.exists(FUNDAMENTAL_PATH):
-        return pd.DataFrame()
-    df = pd.read_csv(FUNDAMENTAL_PATH)
-    df["Ticker"] = df["Ticker"].str.upper().str.strip()
-    return df
+def format_percent(value):
+    try:
+        return f"{value * 100:.2f}%"
+    except Exception:
+        return "-"
+
+
+def format_number(value):
+    try:
+        if abs(value) >= 1_000_000_000_000:
+            return f"{value / 1_000_000_000_000:.2f} T"
+        if abs(value) >= 1_000_000_000:
+            return f"{value / 1_000_000_000:.2f} B"
+        if abs(value) >= 1_000_000:
+            return f"{value / 1_000_000:.2f} M"
+        return f"{value:,.2f}"
+    except Exception:
+        return "-"
+
+
+def metric_card(label, value, small_text=""):
+    st.markdown(
+        f"""
+        <div class="glass-card">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value">{value}</div>
+            <div class="metric-small">{small_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+def get_badge_class(recommendation):
+    if recommendation == "Jangka Panjang":
+        return "badge-green"
+    if recommendation == "Jangka Pendek":
+        return "badge-blue"
+    if recommendation == "Overhyped / Hindari":
+        return "badge-orange"
+    return "badge-red"
+
+
+# ======================================================
+# DATA LOADING
+# ======================================================
+
+@st.cache_data(ttl=3600)
+def load_fundamental_data():
+    path = "data/fundamental_clean.csv"
+
+    if os.path.exists(path):
+        df = pd.read_csv(path)
+        return df
+
+    # Fallback agar app tetap jalan kalau file belum dimasukkan
+    fallback = pd.DataFrame({
+        "Ticker": ["ANTM", "BRMS", "MDKA"],
+        "PER": [14.5, 24.1, -12.4],
+        "PBV": [1.8, 4.5, 8.2],
+        "EPS": [120.5, 5.2, -30.2],
+        "ROE": [0.14, 0.08, -0.05],
+        "DER": [0.6, 1.3, 3.1],
+        "Current_Ratio": [2.1, 1.4, 0.8],
+        "Market_Cap": [50000000000000, 25000000000000, 40000000000000],
+        "Fundamental_Score": [0.9167, 0.6667, 0.0833],
+        "Fundamental_Label": [
+            "Undervalued / Good Fundamental",
+            "Fair Value",
+            "Overvalued / Weak Fundamental"
+        ]
+    })
+
+    return fallback
+
+
+@st.cache_data(ttl=900)
+def fetch_stock_data(ticker_code, period="2y"):
+    data = yf.download(
+        ticker_code,
+        period=period,
+        interval="1d",
+        progress=False,
+        auto_adjust=False
+    )
+
+    if data.empty:
+        raise ValueError("Data harga saham tidak tersedia.")
+
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+
+    data = data.reset_index()
+    data.columns.name = None
+
+    required = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    data = data[required].copy()
+
+    data["Date"] = pd.to_datetime(data["Date"])
+    data = data.sort_values("Date").reset_index(drop=True)
+
+    data["Return"] = data["Close"].pct_change(fill_method=None)
+    data["MA7"] = data["Close"].rolling(window=7).mean()
+    data["MA30"] = data["Close"].rolling(window=30).mean()
+    data["Volatility"] = data["Return"].rolling(window=7).std()
+
+    return data
+
+
+@st.cache_data(ttl=900)
+def fetch_gold_data(period="2y"):
+    gold = yf.download(
+        "GC=F",
+        period=period,
+        interval="1d",
+        progress=False,
+        auto_adjust=False
+    )
+
+    if gold.empty:
+        raise ValueError("Data harga emas tidak tersedia.")
+
+    if isinstance(gold.columns, pd.MultiIndex):
+        gold.columns = gold.columns.get_level_values(0)
+
+    gold = gold.reset_index()
+    gold.columns.name = None
+    gold = gold[["Date", "Close"]].copy()
+    gold = gold.rename(columns={"Close": "Gold_Close"})
+    gold["Date"] = pd.to_datetime(gold["Date"])
+    gold["Gold_Return"] = gold["Gold_Close"].pct_change(fill_method=None)
+
+    return gold
+
+
+@st.cache_data(ttl=900)
+def fetch_news(ticker):
+    news_items = []
+
+    for keyword in NEWS_KEYWORDS.get(ticker, []):
+        query = quote(keyword)
+        url = f"https://news.google.com/rss/search?q={query}&hl=id&gl=ID&ceid=ID:id"
+        feed = feedparser.parse(url)
+
+        for entry in feed.entries[:15]:
+            news_items.append({
+                "Ticker": ticker,
+                "Keyword": keyword,
+                "Title": entry.title if "title" in entry else "",
+                "Published": entry.published if "published" in entry else None,
+                "Source": entry.source.title if "source" in entry else "Google News",
+                "Link": entry.link if "link" in entry else ""
+            })
+
+    news_df = pd.DataFrame(news_items)
+
+    if news_df.empty:
+        return pd.DataFrame(columns=["Date", "Ticker", "Title", "Source", "Link"])
+
+    news_df["Published"] = pd.to_datetime(news_df["Published"], errors="coerce")
+    news_df["Date"] = news_df["Published"].dt.date
+    news_df["Date"] = pd.to_datetime(news_df["Date"], errors="coerce")
+    news_df = news_df.dropna(subset=["Title"]).drop_duplicates(subset=["Title"])
+    news_df = news_df[["Date", "Ticker", "Title", "Source", "Link"]]
+    news_df = news_df.sort_values("Date", ascending=False).reset_index(drop=True)
+
+    return news_df
+
+
+# ======================================================
+# SENTIMENT
+# ======================================================
+
+POSITIVE_WORDS = [
+    "naik", "menguat", "positif", "cuan", "untung", "laba", "melonjak",
+    "tumbuh", "meningkat", "rekor", "prospek", "bagus", "cerah",
+    "buy", "akumulasi", "bullish", "rebound", "mengkilap", "diburu",
+    "rekomendasi", "target", "optimis", "ekspansi", "dividen"
+]
+
+NEGATIVE_WORDS = [
+    "turun", "melemah", "negatif", "rugi", "anjlok", "merosot",
+    "tertekan", "koreksi", "jatuh", "lesu", "beban", "risiko",
+    "sell", "hindari", "bearish", "jeblok", "ambrol", "tekanan",
+    "utang", "turunnya", "penurunan", "waspada"
+]
+
+
+def get_sentiment_score(text):
+    text = str(text).lower()
+
+    pos_count = sum(1 for word in POSITIVE_WORDS if word in text)
+    neg_count = sum(1 for word in NEGATIVE_WORDS if word in text)
+
+    raw_score = pos_count - neg_count
+
+    if raw_score > 0:
+        label = "Positive"
+        score = min(raw_score / 3, 1)
+    elif raw_score < 0:
+        label = "Negative"
+        score = max(raw_score / 3, -1)
+    else:
+        label = "Neutral"
+        score = 0
+
+    return label, score
+
+
+def apply_sentiment(news_df):
+    if news_df.empty:
+        return news_df, 0, "Neutral", 0
+
+    sentiment_result = news_df["Title"].apply(get_sentiment_score)
+    news_df["Sentiment_Label"] = sentiment_result.apply(lambda x: x[0])
+    news_df["Sentiment_Score"] = sentiment_result.apply(lambda x: x[1])
+
+    avg_score = news_df["Sentiment_Score"].mean()
+    news_count = len(news_df)
+
+    if avg_score > 0.1:
+        label = "Positive"
+    elif avg_score < -0.1:
+        label = "Negative"
+    else:
+        label = "Neutral"
+
+    return news_df, avg_score, label, news_count
+
+
+# ======================================================
+# MODEL AND RECOMMENDATION
+# ======================================================
 
 @st.cache_resource
 def load_model():
-    if not os.path.exists(MODEL_PATH):
-        return None
-    return joblib.load(MODEL_PATH)
+    model_path = "models/rf_model.pkl"
+    if os.path.exists(model_path):
+        return joblib.load(model_path)
+    return None
 
-def get_fundamental_dict(ticker: str, fund_df: pd.DataFrame) -> dict:
-    row = fund_df[fund_df["Ticker"] == ticker]
-    if row.empty:
-        return {}
-    return row.iloc[0].to_dict()
 
-def make_stock_chart(stock_df: pd.DataFrame, ticker: str) -> go.Figure:
-    df = stock_df.copy()
-    df["Date"] = pd.to_datetime(df["Date"])
+def fallback_predict_return(row):
+    """
+    Fallback kalau model belum tersedia.
+    Ini bukan model ML, tapi rule-based signal agar app tetap bisa demo.
+    """
 
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.04,
-        row_heights=[0.72, 0.28],
-    )
+    technical_signal = 0
 
-    # Candlestick
-    fig.add_trace(go.Candlestick(
-        x=df["Date"], open=df["Open"], high=df["High"],
-        low=df["Low"], close=df["Close"],
-        name="Harga", increasing_line_color="#10B981",
-        decreasing_line_color="#EF4444",
-        increasing_fillcolor="rgba(16, 185, 129, 0.2)",
-        decreasing_fillcolor="rgba(239, 68, 68, 0.2)",
-    ), row=1, col=1)
-
-    # MA7
-    fig.add_trace(go.Scatter(
-        x=df["Date"], y=df["MA7"], name="MA7",
-        line=dict(color="#F59E0B", width=2, dash="solid"),
-        opacity=0.9,
-    ), row=1, col=1)
-
-    # MA30
-    fig.add_trace(go.Scatter(
-        x=df["Date"], y=df["MA30"], name="MA30",
-        line=dict(color="#3B82F6", width=2, dash="dot"),
-        opacity=0.9,
-    ), row=1, col=1)
-
-    # Volume
-    colors_vol = ["#10B981" if c >= o else "#EF4444"
-                  for c, o in zip(df["Close"], df["Open"])]
-    fig.add_trace(go.Bar(
-        x=df["Date"], y=df["Volume"], name="Volume",
-        marker_color=colors_vol, opacity=0.5,
-    ), row=2, col=1)
-
-    fig.update_layout(
-        title=dict(text=f"{ticker} — Grafik Harga & Volume",
-                   font=dict(color="#1E293B", size=16, family="Plus Jakarta Sans", weight="bold")),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#475569", family="Plus Jakarta Sans"),
-        legend=dict(bgcolor="rgba(255,255,255,0.8)", font=dict(color="#1E293B")),
-        xaxis_rangeslider_visible=False,
-        height=500,
-        margin=dict(l=0, r=0, t=40, b=0),
-    )
-    fig.update_xaxes(gridcolor="rgba(0,0,0,0.05)", zeroline=False)
-    fig.update_yaxes(gridcolor="rgba(0,0,0,0.05)", zeroline=False)
-    return fig
-
-def make_sentiment_gauge(score: float) -> go.Figure:
-    color = "#10B981" if score >= 0.1 else "#EF4444" if score <= -0.1 else "#F59E0B"
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=score,
-        number={"font": {"color": color, "size": 42, "family": "Plus Jakarta Sans", "weight": "bold"},
-                "suffix": "", "valueformat": ".3f"},
-        gauge=dict(
-            axis=dict(range=[-1, 1], tickcolor="#94A3B8",
-                      tickfont=dict(color="#64748B", size=12)),
-            bar=dict(color=color, thickness=0.25),
-            bgcolor="rgba(0,0,0,0.03)",
-            bordercolor="rgba(0,0,0,0)",
-            steps=[
-                dict(range=[-1, -0.1], color="rgba(239, 68, 68, 0.15)"),
-                dict(range=[-0.1, 0.1], color="rgba(245, 158, 11, 0.1)"),
-                dict(range=[0.1, 1],   color="rgba(16, 185, 129, 0.15)"),
-            ],
-            threshold=dict(line=dict(color=color, width=4), value=score),
-        ),
-        domain={"x": [0, 1], "y": [0, 1]},
-    ))
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#475569", family="Plus Jakarta Sans"),
-        height=240,
-        margin=dict(l=20, r=20, t=20, b=10),
-    )
-    return fig
-
-# ─── PAGE RENDERS ──────────────────────────────────────────────────────────────
-
-def render_home_page():
-    st.markdown("""
-    <div class="hero-container">
-        <div class="hero-badge">Capstone Project Data Science</div>
-        <div class="hero-title">GoldStock <span>Insight</span></div>
-        <p class="hero-subtitle">
-            Platform pintar untuk membantu Anda mengambil keputusan investasi pada saham sektor emas di Indonesia. Didukung oleh Machine Learning dan Analisis Sentimen Real-time.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("""
-        <div class="feature-card">
-            <div class="feature-icon-wrapper">ML</div>
-            <h4 style="color: #0F172A; margin-bottom: 12px; font-weight: 700; font-size: 1.1rem;">Machine Learning</h4>
-            <p style="color: #64748B; font-size: 0.95rem; line-height: 1.6;">Menggunakan model Random Forest untuk memprediksi tren return saham berdasarkan data historis dan teknikal terkini.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown("""
-        <div class="feature-card">
-            <div class="feature-icon-wrapper">NLP</div>
-            <h4 style="color: #0F172A; margin-bottom: 12px; font-weight: 700; font-size: 1.1rem;">Sentimen Berita</h4>
-            <p style="color: #64748B; font-size: 0.95rem; line-height: 1.6;">Menganalisis sentimen dari ratusan berita terbaru untuk mengetahui persepsi pasar secara instan.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown("""
-        <div class="feature-card">
-            <div class="feature-icon-wrapper">FA</div>
-            <h4 style="color: #0F172A; margin-bottom: 12px; font-weight: 700; font-size: 1.1rem;">Fundamental</h4>
-            <p style="color: #64748B; font-size: 0.95rem; line-height: 1.6;">Menilai kesehatan perusahaan (PER, PBV, ROE) agar investasi Anda tetap berpijak pada nilai intrinsik.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 1.2, 1])
-    with col_btn2:
-        if st.button("Mulai Analisis Sekarang", use_container_width=True):
-            st.session_state.page = "analysis"
-            st.rerun()
-
-def render_analysis_page():
-    st.markdown("""
-    <div style="margin-bottom: 2rem;">
-    """, unsafe_allow_html=True)
-    if st.button("Kembali ke Beranda"):
-        st.session_state.page = "home"
-        st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
-        
-    st.markdown('<div class="card-gold">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Pilih Saham & Tujuan Investasi</div>', unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([2, 2, 1.5])
-    with col1:
-        ticker = st.selectbox("Pilih Saham", TICKER_OPTIONS,
-                              help="Pilih saham sektor emas yang ingin dianalisis")
-    with col2:
-        investment_goal = st.selectbox("Tujuan Investasi", GOAL_OPTIONS,
-                                       help="Pilih horizon investasi Anda")
-    with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        run = st.button("Jalankan Analisis")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    if not run:
-        st.markdown("""
-        <div style="text-align:center; padding: 5rem 2rem; color: #64748B; background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(8px); border-radius: 20px; border: 1px dashed #CBD5E1; margin-top: 1rem;">
-            <div style="font-size: 1.25rem; font-weight: 700; color: #1E293B; margin-bottom: 8px;">
-                Sistem Siap Digunakan
-            </div>
-            <div style="font-size: 1rem; color: #64748B;">
-                Tentukan saham dan tujuan Anda, klik tombol analisis, dan biarkan sistem bekerja untuk Anda.
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        return
-
-    # ── Analysis Flow ─────────────────────────────────────────────────────────
-    with st.spinner("Mengambil data pasar terbaru..."):
-        stock_df = fetch_stock_data(ticker)
-
-    if stock_df.empty:
-        st.error(f"Gagal mengambil data harga saham {ticker}. Coba lagi beberapa saat.")
-        return
-
-    with st.spinner("Mengambil harga emas global..."):
-        gold_df = fetch_gold_price()
-
-    stock_df_raw = calculate_technical_features(stock_df.copy())
-    stock_df = merge_gold_features(stock_df_raw.copy(), gold_df)
-
-    with st.spinner("Mengambil & menganalisis berita terbaru..."):
-        news_df = fetch_news(ticker)
-        sentiment = analyze_sentiment(news_df)
-
-    # Load fundamental
-    fund_df = load_fundamental()
-    if fund_df.empty:
-        st.warning("File fundamental_clean.csv tidak ditemukan. Analisis fundamental dinonaktifkan.")
-        fundamental = {}
+    if row["Close"] > row["MA7"]:
+        technical_signal += 0.008
     else:
-        fundamental = get_fundamental_dict(ticker, fund_df)
-        if not fundamental:
-            st.warning(f"Data fundamental untuk {ticker} tidak ditemukan dalam CSV.")
+        technical_signal -= 0.004
 
-    # Prediksi return
+    if row["MA7"] > row["MA30"]:
+        technical_signal += 0.012
+    else:
+        technical_signal -= 0.006
+
+    sentiment_signal = row["Sentiment_Score"] * 0.012
+    fundamental_signal = (row["Fundamental_Score"] - 0.5) * 0.025
+    gold_signal = row["Gold_Return"] * 0.6 if not pd.isna(row["Gold_Return"]) else 0
+
+    volatility_penalty = min(row["Volatility"], 0.08) * 0.15 if not pd.isna(row["Volatility"]) else 0
+
+    predicted = technical_signal + sentiment_signal + fundamental_signal + gold_signal - volatility_penalty
+
+    return float(np.clip(predicted, -0.08, 0.12))
+
+
+def prepare_latest_row(stock_df, gold_df, fundamental_row, sentiment_score, news_count):
+    merged = pd.merge(
+        stock_df,
+        gold_df[["Date", "Gold_Close", "Gold_Return"]],
+        on="Date",
+        how="left"
+    )
+
+    merged = merged.ffill().dropna().reset_index(drop=True)
+
+    latest = merged.iloc[-1].copy()
+
+    latest["Sentiment_Score"] = sentiment_score
+    latest["News_Count"] = news_count
+
+    for col in ["PER", "PBV", "EPS", "ROE", "DER", "Current_Ratio", "Fundamental_Score"]:
+        latest[col] = fundamental_row[col]
+
+    return latest
+
+
+def predict_return(latest_row):
     model = load_model()
-    predicted_return = 0.0
 
-    if model is not None and fundamental:
-        try:
-            # Gunakan stock_df_raw (sebelum gold merge) agar build_feature_row bisa merge sendiri
-            feature_row = build_feature_row(stock_df_raw.copy(), gold_df, sentiment, fundamental)
-            if feature_row is not None:
-                predicted_return = float(model.predict(feature_row)[0])
-        except Exception as e:
-            st.warning(f"Model gagal melakukan prediksi: {e}. Menggunakan rule-based fallback.")
-    elif model is None:
-        st.info("Model belum dilatih. Jalankan `python train_model.py` terlebih dahulu. Menggunakan estimasi fundamental.")
-        predicted_return = fundamental.get("Fundamental_Score", 0.5) * 0.08
+    if model is None:
+        return fallback_predict_return(latest_row), "Rule-based fallback"
 
-    # Generate rekomendasi
-    result = generate_recommendation(
-        predicted_return=predicted_return,
-        sentiment_score=sentiment["Sentiment_Score"],
-        fundamental_score=float(fundamental.get("Fundamental_Score", 0.5)),
-        investment_goal=investment_goal,
-        ticker=ticker,
-        fundamental_label=str(fundamental.get("Fundamental_Label", "")),
+    try:
+        X = pd.DataFrame([latest_row[MODEL_FEATURES]])
+        prediction = model.predict(X)[0]
+        return float(prediction), "Random Forest Model"
+    except Exception:
+        return fallback_predict_return(latest_row), "Rule-based fallback"
+
+
+def generate_recommendation(predicted_return, sentiment_score, fundamental_score, investment_goal):
+    predicted_pct = predicted_return * 100
+
+    if investment_goal == "Jangka Pendek":
+        if predicted_pct < 1:
+            recommendation = "Tidak Disarankan"
+            risk = "Tinggi"
+        elif 1 <= predicted_pct < 3:
+            if sentiment_score >= 0:
+                recommendation = "Jangka Pendek"
+                risk = "Sedang"
+            else:
+                recommendation = "Tidak Disarankan"
+                risk = "Tinggi"
+        elif predicted_pct >= 3:
+            if sentiment_score >= -0.1:
+                recommendation = "Jangka Pendek"
+                risk = "Sedang"
+            else:
+                recommendation = "Overhyped / Hindari"
+                risk = "Tinggi"
+        else:
+            recommendation = "Tidak Disarankan"
+            risk = "Tinggi"
+
+    else:
+        if fundamental_score >= 0.7 and predicted_pct >= 3 and sentiment_score >= -0.1:
+            recommendation = "Jangka Panjang"
+            risk = "Rendah - Sedang"
+        elif fundamental_score >= 0.4 and predicted_pct >= 2:
+            recommendation = "Jangka Pendek"
+            risk = "Sedang"
+        elif predicted_pct >= 3 and fundamental_score < 0.4:
+            recommendation = "Overhyped / Hindari"
+            risk = "Tinggi"
+        else:
+            recommendation = "Tidak Disarankan"
+            risk = "Tinggi"
+
+    overall_score = (
+        (min(max(predicted_pct / 8, 0), 1) * 0.40) +
+        ((sentiment_score + 1) / 2 * 0.25) +
+        (fundamental_score * 0.35)
+    ) * 100
+
+    return recommendation, risk, overall_score
+
+
+def generate_explanation(ticker, recommendation, predicted_return, sentiment_label, fundamental_label, investment_goal):
+    predicted_pct = predicted_return * 100
+    company = COMPANY_NAMES.get(ticker, ticker)
+
+    if recommendation == "Jangka Panjang":
+        return (
+            f"{company} mendapatkan rekomendasi Jangka Panjang karena memiliki dukungan fundamental yang kuat, "
+            f"sentimen berita terbaru berada pada kategori {sentiment_label}, dan prediksi return berada di sekitar "
+            f"{predicted_pct:.2f}%. Untuk tujuan {investment_goal}, saham ini layak dipertimbangkan karena tidak hanya "
+            f"bergerak berdasarkan sentimen pasar, tetapi juga didukung kondisi fundamental yang baik."
+        )
+
+    if recommendation == "Jangka Pendek":
+        return (
+            f"{company} lebih sesuai untuk strategi Jangka Pendek. Prediksi return berada di sekitar "
+            f"{predicted_pct:.2f}% dan sentimen berita berada pada kategori {sentiment_label}. Namun, untuk keputusan "
+            f"jangka panjang, investor tetap perlu memperhatikan kekuatan fundamental dan risiko volatilitas harga."
+        )
+
+    if recommendation == "Overhyped / Hindari":
+        return (
+            f"{company} terindikasi perlu diwaspadai karena potensi kenaikan harga belum cukup didukung oleh "
+            f"fundamental yang kuat. Kondisi fundamental saat ini berada pada kategori {fundamental_label}. "
+            f"Hal ini dapat menunjukkan risiko overhyped, yaitu harga terlihat menarik karena sentimen pasar, "
+            f"tetapi belum sepenuhnya sejalan dengan kondisi dasar perusahaan."
+        )
+
+    return (
+        f"{company} saat ini belum memenuhi kriteria yang cukup kuat untuk tujuan {investment_goal}. "
+        f"Prediksi return berada di sekitar {predicted_pct:.2f}%, sentimen berita berada pada kategori "
+        f"{sentiment_label}, dan kondisi fundamental berada pada kategori {fundamental_label}. "
+        f"Karena itu, saham ini lebih baik dipantau terlebih dahulu sebelum mengambil keputusan investasi."
     )
 
-    st.success("Analisis selesai dengan sukses!")
 
-    # ── HASIL REKOMENDASI ─────────────────────────────────────────────────────
-    st.markdown('<hr class="gold-divider">', unsafe_allow_html=True)
-    rec_color = REC_COLORS.get(result["recommendation"], "#94A3B8")
+# ======================================================
+# CHARTS
+# ======================================================
 
-    st.markdown(f"""
-    <div class="card-gold" style="border-left-color: {rec_color}; background: #FFFFFF; box-shadow: 0 15px 35px -5px {rec_color}22;">
-        <div class="section-title" style="justify-content: center; margin-bottom: 8px;">Kesimpulan Rekomendasi</div>
-        <div style="text-align:center; padding: 10px 0;">
-            <div style="font-size: 1rem; color: #64748B; font-weight: 600; margin-bottom: 16px; letter-spacing: 0.5px;">
-                {ticker} • {investment_goal}
-            </div>
-            <div class="rec-badge" style="background: {rec_color}10; border: 2px solid {rec_color}; color: {rec_color}; margin: auto; width: fit-content;">
-                {result["recommendation"]}
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+def create_stock_chart(stock_df, ticker):
+    fig = go.Figure()
 
-    # Metrics row
-    last_close = float(stock_df["Close"].iloc[-1]) if not stock_df.empty else 0
-    prev_close = float(stock_df["Close"].iloc[-2]) if len(stock_df) > 1 else last_close
-    price_chg = ((last_close - prev_close) / prev_close * 100) if prev_close else 0
+    fig.add_trace(go.Scatter(
+        x=stock_df["Date"],
+        y=stock_df["Close"],
+        mode="lines",
+        name="Close Price",
+        line=dict(width=3)
+    ))
 
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.markdown(f"""<div class="fund-box">
-            <div class="fund-label">Harga Terakhir</div>
-            <div class="fund-value">Rp {last_close:,.0f}</div>
-            <div style="font-size:0.85rem; font-weight:700; margin-top:6px; color:{'#10B981' if price_chg>=0 else '#EF4444'}">
-                {'▲' if price_chg>=0 else '▼'} {abs(price_chg):.2f}%
-            </div>
-        </div>""", unsafe_allow_html=True)
-    with m2:
-        ret_color = "#10B981" if result["predicted_return_pct"] >= 3 else "#EF4444"
-        st.markdown(f"""<div class="fund-box">
-            <div class="fund-label">Prediksi AI Return</div>
-            <div class="fund-value" style="color:{ret_color}">{result['predicted_return_pct']:.2f}%</div>
-        </div>""", unsafe_allow_html=True)
-    with m3:
-        sent_color = "#10B981" if sentiment["Sentiment_Label"] == "Positif" else \
-                     "#EF4444" if sentiment["Sentiment_Label"] == "Negatif" else "#F59E0B"
-        st.markdown(f"""<div class="fund-box">
-            <div class="fund-label">Sentimen Berita</div>
-            <div class="fund-value" style="color:{sent_color}">{sentiment['Sentiment_Label']}</div>
-            <div style="font-size:0.8rem; font-weight:600; color:#94A3B8; margin-top:6px;">Dari {sentiment['News_Count']} sumber</div>
-        </div>""", unsafe_allow_html=True)
-    with m4:
-        risk_color = REC_COLORS.get(result["recommendation"], "#94A3B8")
-        st.markdown(f"""<div class="fund-box">
-            <div class="fund-label">Level Risiko</div>
-            <div class="fund-value" style="color:{risk_color}">{result['risk_level']}</div>
-        </div>""", unsafe_allow_html=True)
+    fig.add_trace(go.Scatter(
+        x=stock_df["Date"],
+        y=stock_df["MA7"],
+        mode="lines",
+        name="MA7",
+        line=dict(width=2, dash="dot")
+    ))
 
-    # ── GRAFIK HARGA ──────────────────────────────────────────────────────────
-    st.markdown('<div class="card" style="margin-top: 1.5rem;">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Grafik Harga Saham</div>', unsafe_allow_html=True)
-    st.plotly_chart(make_stock_chart(stock_df, ticker), use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    fig.add_trace(go.Scatter(
+        x=stock_df["Date"],
+        y=stock_df["MA30"],
+        mode="lines",
+        name="MA30",
+        line=dict(width=2, dash="dash")
+    ))
 
-    # ── SENTIMEN & BERITA ─────────────────────────────────────────────────────
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Sentimen & Berita Terbaru</div>', unsafe_allow_html=True)
+    fig.update_layout(
+        title=f"Pergerakan Harga Saham {ticker}",
+        template="plotly_dark",
+        height=430,
+        margin=dict(l=20, r=20, t=55, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,23,42,0.25)",
+        font=dict(color="#e2e8f0"),
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
 
-    sc1, sc2 = st.columns([1, 2])
-    with sc1:
-        st.plotly_chart(make_sentiment_gauge(sentiment["Sentiment_Score"]), use_container_width=True)
-        sent_color = "#10B981" if sentiment["Sentiment_Label"] == "Positif" else \
-                     "#EF4444" if sentiment["Sentiment_Label"] == "Negatif" else "#F59E0B"
-        st.markdown(f"""<div style="text-align:center; margin-top:-15px;">
-            <span style="font-size:1.4rem; font-weight:800; color:{sent_color}">
-                {sentiment['Sentiment_Label']}
-            </span>
-            <div style="font-size:0.9rem; font-weight:600; color:#64748B; margin-top:8px;">
-                Skor Sentimen: {sentiment['Sentiment_Score']:.3f}
-            </div>
-        </div>""", unsafe_allow_html=True)
+    fig.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.12)")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.12)")
 
-    with sc2:
-        if news_df.empty:
-            st.info("Tidak ada berita yang berhasil diambil saat ini.")
-        else:
-            for _, row in news_df.head(6).iterrows():
-                date_str = row["Date"].strftime("%d %b %Y") if pd.notna(row["Date"]) else "—"
-                st.markdown(f"""
-                <div class="news-row">
-                    <a href="{row['Link']}" target="_blank" style="text-decoration:none;">
-                        <div class="news-title">{row['Title']}</div>
-                        <div class="news-meta">{date_str} • {row['Source']}</div>
-                    </a>
-                </div>""", unsafe_allow_html=True)
+    return fig
 
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── FUNDAMENTAL ───────────────────────────────────────────────────────────
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Analisis Fundamental</div>', unsafe_allow_html=True)
+def create_sentiment_chart(news_df):
+    if news_df.empty or "Sentiment_Label" not in news_df.columns:
+        return None
 
-    if not fundamental:
-        st.info("Data fundamental belum tersedia untuk saham ini.")
-    else:
-        fund_score = float(fundamental.get("Fundamental_Score", 0))
-        fund_label = str(fundamental.get("Fundamental_Label", "—"))
-        fund_label_color = "#10B981" if fund_score >= 0.7 else "#F59E0B" if fund_score >= 0.5 else "#EF4444"
+    sentiment_counts = news_df["Sentiment_Label"].value_counts().reset_index()
+    sentiment_counts.columns = ["Sentiment", "Count"]
 
-        st.markdown(f"""
-        <div style="text-align:center; margin-bottom:30px; padding: 24px; background: #F8FAFC; border-radius: 16px; border: 1px solid #E2E8F0;">
-            <span style="font-size:0.95rem; font-weight:700; color:#64748B; text-transform:uppercase; letter-spacing:1.5px;">Skor Kesehatan Fundamental</span><br>
-            <div style="margin-top: 12px; display: flex; align-items: center; justify-content: center; gap: 16px;">
-                <span style="font-size:3.5rem; font-weight:800; color:{fund_label_color}; line-height:1;">
-                    {fund_score:.2f}
-                </span>
-                <span style="font-size:1.2rem; font-weight:700; color:{fund_label_color}; padding: 6px 16px; background: {fund_label_color}15; border-radius: 30px;">
-                    {fund_label}
-                </span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        f_cols = st.columns(4)
-        metrics = [
-            ("PER",          fundamental.get("PER", "—"),           "Price to Earnings"),
-            ("PBV",          fundamental.get("PBV", "—"),           "Price to Book Value"),
-            ("EPS",          fundamental.get("EPS", "—"),           "Earnings per Share"),
-            ("ROE",          fundamental.get("ROE", "—"),           "Return on Equity"),
-            ("DER",          fundamental.get("DER", "—"),           "Debt to Equity"),
-            ("Current Ratio",fundamental.get("Current_Ratio", "—"), "Likuiditas"),
-            ("Market Cap",   fundamental.get("Market_Cap", "—"),    "Kapitalisasi Pasar"),
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=sentiment_counts["Sentiment"],
+                values=sentiment_counts["Count"],
+                hole=0.62
+            )
         ]
-        for i, (label, value, tooltip) in enumerate(metrics):
-            with f_cols[i % 4]:
-                try:
-                    display_val = f"{float(value):,.2f}"
-                except Exception:
-                    display_val = str(value)
-                st.markdown(f"""<div class="fund-box" title="{tooltip}" style="padding: 16px; margin-bottom: 16px;">
-                    <div class="fund-label" style="font-size:0.75rem;">{label}</div>
-                    <div class="fund-value" style="font-size:1.25rem;">{display_val}</div>
-                </div>""", unsafe_allow_html=True)
+    )
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    fig.update_layout(
+        template="plotly_dark",
+        height=320,
+        margin=dict(l=20, r=20, t=35, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e2e8f0"),
+        title="Distribusi Sentimen Berita"
+    )
 
-    # ── PENJELASAN ────────────────────────────────────────────────────────────
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">Penjelasan Keputusan AI</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="explanation-box">{result["explanation"]}</div>',
-                unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    return fig
 
 
-# ─── MAIN APP ROUTING ──────────────────────────────────────────────────────────
+# ======================================================
+# HERO
+# ======================================================
 
-def main():
-    if "page" not in st.session_state:
-        st.session_state.page = "home"
-
-    if st.session_state.page == "home":
-        render_home_page()
-    elif st.session_state.page == "analysis":
-        render_analysis_page()
-
-    # Footer always shown
-    st.markdown('<hr class="gold-divider">', unsafe_allow_html=True)
-    st.markdown("""
-    <div style="text-align:center; padding: 20px; color: #64748B; font-size: 0.9rem; line-height: 1.8;">
-        <strong style="color: #475569;">Disclaimer</strong><br>
-        Aplikasi ini hanya digunakan sebagai alat bantu analisis dan edukasi.<br>
-        Hasil rekomendasi bukan merupakan ajakan untuk membeli atau menjual saham.<br>
-        Keputusan investasi sepenuhnya menjadi tanggung jawab investor.<br><br>
-        <span style="color: #94A3B8; font-weight: 600; letter-spacing: 0.5px;">GOLDSTOCK INSIGHT • CAPSTONE PROJECT 2024</span>
+st.markdown(
+    """
+    <div class="hero-container">
+        <div class="premium-badge">● REAL-TIME HYBRID FINTECH DASHBOARD</div>
+        <div class="hero-title">
+            GoldStock <span class="gold-text">Insight</span>
+        </div>
+        <div class="hero-subtitle">
+            Sistem rekomendasi saham sektor emas Indonesia berbasis harga saham, harga emas global,
+            sentimen berita, dan fundamental perusahaan. Pilih saham, tentukan tujuan investasi,
+            lalu dapatkan analisis yang lebih mudah dipahami.
+        </div>
+        <div class="hero-mini">
+            <div class="mini-chip">📈 Real-time Stock Data</div>
+            <div class="mini-chip">📰 News Sentiment</div>
+            <div class="mini-chip">🏦 Fundamental Analysis</div>
+            <div class="mini-chip">🤖 Prediction Model</div>
+        </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True
+)
 
-if __name__ == "__main__":
-    main()
+st.write("")
+
+
+# ======================================================
+# INPUT SECTION
+# ======================================================
+
+st.markdown('<div class="section-title">Analisis Saham</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-caption">Pilih saham dan tujuan investasi untuk mendapatkan rekomendasi berbasis data terbaru.</div>',
+    unsafe_allow_html=True
+)
+
+input_col1, input_col2, input_col3 = st.columns([1.2, 1.2, 1])
+
+with input_col1:
+    selected_ticker = st.selectbox(
+        "Pilih Saham",
+        options=["ANTM", "MDKA", "BRMS"],
+        index=0
+    )
+
+with input_col2:
+    investment_goal = st.selectbox(
+        "Tujuan Investasi",
+        options=["Jangka Pendek", "Jangka Panjang"],
+        index=1
+    )
+
+with input_col3:
+    st.write("")
+    analyze_button = st.button("Analisis Saham Sekarang")
+
+
+# ======================================================
+# DEFAULT MESSAGE
+# ======================================================
+
+if not analyze_button:
+    st.markdown(
+        """
+        <div class="gold-card">
+            <div class="recommendation-title">Mulai Analisis</div>
+            <div class="recommendation-main">Pilih Saham</div>
+            <div class="recommendation-desc">
+                Klik tombol <b>Analisis Saham Sekarang</b> untuk mengambil data harga terbaru,
+                membaca berita, menghitung sentimen, dan menghasilkan rekomendasi investasi.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.write("")
+    st.markdown('<div class="section-title">Cara Kerja Sistem</div>', unsafe_allow_html=True)
+
+    step1, step2, step3, step4 = st.columns(4)
+
+    with step1:
+        st.markdown(
+            """
+            <div class="step-box">
+                <div class="step-number">1</div>
+                <div class="step-title">Ambil Data Harga</div>
+                <div class="step-desc">Sistem mengambil harga saham dan harga emas terbaru dari yfinance.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with step2:
+        st.markdown(
+            """
+            <div class="step-box">
+                <div class="step-number">2</div>
+                <div class="step-title">Ambil Berita</div>
+                <div class="step-desc">Sistem mengambil berita terbaru dari Google News RSS berdasarkan ticker saham.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with step3:
+        st.markdown(
+            """
+            <div class="step-box">
+                <div class="step-number">3</div>
+                <div class="step-title">Hitung Skor</div>
+                <div class="step-desc">Sistem menghitung sentimen berita dan membaca skor fundamental perusahaan.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with step4:
+        st.markdown(
+            """
+            <div class="step-box">
+                <div class="step-number">4</div>
+                <div class="step-title">Beri Rekomendasi</div>
+                <div class="step-desc">Sistem menggabungkan seluruh sinyal untuk menghasilkan rekomendasi akhir.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.stop()
+
+
+# ======================================================
+# ANALYSIS PROCESS
+# ======================================================
+
+with st.spinner("Sedang mengambil data terbaru dan menjalankan analisis..."):
+    time.sleep(0.7)
+
+    try:
+        fundamental_df = load_fundamental_data()
+        ticker_fundamental = fundamental_df[fundamental_df["Ticker"] == selected_ticker]
+
+        if ticker_fundamental.empty:
+            st.error("Data fundamental untuk saham ini belum tersedia.")
+            st.stop()
+
+        fundamental_row = ticker_fundamental.iloc[0]
+
+        stock_df = fetch_stock_data(TICKER_MAP[selected_ticker])
+        gold_df = fetch_gold_data()
+        news_df = fetch_news(selected_ticker)
+        news_df, avg_sentiment_score, sentiment_label, news_count = apply_sentiment(news_df)
+
+        latest_row = prepare_latest_row(
+            stock_df=stock_df,
+            gold_df=gold_df,
+            fundamental_row=fundamental_row,
+            sentiment_score=avg_sentiment_score,
+            news_count=news_count
+        )
+
+        predicted_return, model_source = predict_return(latest_row)
+
+        recommendation, risk_level, overall_score = generate_recommendation(
+            predicted_return=predicted_return,
+            sentiment_score=avg_sentiment_score,
+            fundamental_score=fundamental_row["Fundamental_Score"],
+            investment_goal=investment_goal
+        )
+
+        explanation = generate_explanation(
+            ticker=selected_ticker,
+            recommendation=recommendation,
+            predicted_return=predicted_return,
+            sentiment_label=sentiment_label,
+            fundamental_label=fundamental_row["Fundamental_Label"],
+            investment_goal=investment_goal
+        )
+
+    except Exception as e:
+        st.error(f"Analisis gagal dijalankan: {e}")
+        st.stop()
+
+
+# ======================================================
+# RESULT SUMMARY
+# ======================================================
+
+st.write("")
+badge_class = get_badge_class(recommendation)
+
+summary_left, summary_right = st.columns([1.45, 1])
+
+with summary_left:
+    st.markdown(
+        f"""
+        <div class="gold-card">
+            <div class="recommendation-title">Rekomendasi Akhir</div>
+            <div class="recommendation-main">{recommendation}</div>
+            <div class="recommendation-desc">
+                Saham <b>{selected_ticker}</b> — {COMPANY_NAMES[selected_ticker]}<br>
+                Tujuan investasi: <b>{investment_goal}</b><br>
+                Sumber prediksi: <b>{model_source}</b>
+            </div>
+            <div class="badge {badge_class}">{risk_level}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+with summary_right:
+    r1, r2 = st.columns(2)
+
+    with r1:
+        metric_card("Predicted Return", f"{predicted_return * 100:.2f}%", "Estimasi potensi return")
+    with r2:
+        metric_card("Overall Score", f"{overall_score:.1f}/100", "Skor gabungan sistem")
+
+    r3, r4 = st.columns(2)
+
+    with r3:
+        metric_card("Sentiment", sentiment_label, f"Score {avg_sentiment_score:.2f}")
+    with r4:
+        metric_card("News Count", f"{news_count}", "Berita terbaru")
+
+
+# ======================================================
+# TABS
+# ======================================================
+
+st.write("")
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📈 Harga Saham",
+    "📰 Sentimen Berita",
+    "🏦 Fundamental",
+    "🧠 Alasan Rekomendasi"
+])
+
+
+# ======================================================
+# STOCK TAB
+# ======================================================
+
+with tab1:
+    st.markdown('<div class="section-title">Pergerakan Harga Saham</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-caption">Grafik harga penutupan, moving average 7 hari, dan moving average 30 hari.</div>',
+        unsafe_allow_html=True
+    )
+
+    chart_df = stock_df.dropna().copy()
+
+    st.plotly_chart(
+        create_stock_chart(chart_df, selected_ticker),
+        use_container_width=True
+    )
+
+    latest_close = latest_row["Close"]
+    latest_return = latest_row["Return"]
+    latest_volatility = latest_row["Volatility"]
+    latest_gold_return = latest_row["Gold_Return"]
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        metric_card("Latest Close", format_number(latest_close), "Harga penutupan terbaru")
+    with c2:
+        metric_card("Daily Return", format_percent(latest_return), "Return harian")
+    with c3:
+        metric_card("Volatility", format_percent(latest_volatility), "Volatilitas 7 hari")
+    with c4:
+        metric_card("Gold Return", format_percent(latest_gold_return), "Return emas global")
+
+
+# ======================================================
+# NEWS TAB
+# ======================================================
+
+with tab2:
+    st.markdown('<div class="section-title">Sentimen Berita Terbaru</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-caption">Berita diambil secara real-time dari Google News RSS, lalu dihitung skor sentimennya.</div>',
+        unsafe_allow_html=True
+    )
+
+    news_col1, news_col2 = st.columns([1, 1.4])
+
+    with news_col1:
+        if not news_df.empty:
+            sentiment_fig = create_sentiment_chart(news_df)
+            if sentiment_fig:
+                st.plotly_chart(sentiment_fig, use_container_width=True)
+        else:
+            st.info("Belum ada berita terbaru yang tersedia.")
+
+    with news_col2:
+        metric_a, metric_b, metric_c = st.columns(3)
+        with metric_a:
+            metric_card("Avg Sentiment", f"{avg_sentiment_score:.2f}", "Rata-rata skor")
+        with metric_b:
+            metric_card("Label", sentiment_label, "Kategori sentimen")
+        with metric_c:
+            metric_card("Total News", f"{news_count}", "Jumlah berita")
+
+    st.write("")
+    st.markdown('<div class="section-title">Daftar Berita</div>', unsafe_allow_html=True)
+
+    if news_df.empty:
+        st.warning("Berita terbaru belum tersedia. Sistem menggunakan sentimen netral.")
+    else:
+        for _, row in news_df.head(8).iterrows():
+            date_text = row["Date"].strftime("%d %b %Y") if pd.notna(row["Date"]) else "-"
+            label = row.get("Sentiment_Label", "Neutral")
+            score = row.get("Sentiment_Score", 0)
+
+            st.markdown(
+                f"""
+                <div class="news-card">
+                    <div class="news-title">{row["Title"]}</div>
+                    <div class="news-meta">{date_text} • {row["Source"]} • {label} ({score:.2f})</div>
+                    <a class="news-link" href="{row["Link"]}" target="_blank">Baca berita →</a>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+
+# ======================================================
+# FUNDAMENTAL TAB
+# ======================================================
+
+with tab3:
+    st.markdown('<div class="section-title">Analisis Fundamental</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-caption">Data fundamental digunakan untuk melihat kualitas valuasi dan kondisi dasar perusahaan.</div>',
+        unsafe_allow_html=True
+    )
+
+    f1, f2, f3, f4 = st.columns(4)
+
+    with f1:
+        metric_card("PER", format_number(fundamental_row["PER"]), "Price Earnings Ratio")
+    with f2:
+        metric_card("PBV", format_number(fundamental_row["PBV"]), "Price to Book Value")
+    with f3:
+        metric_card("EPS", format_number(fundamental_row["EPS"]), "Earnings Per Share")
+    with f4:
+        metric_card("ROE", format_percent(fundamental_row["ROE"]), "Return on Equity")
+
+    st.write("")
+
+    f5, f6, f7, f8 = st.columns(4)
+
+    with f5:
+        metric_card("DER", format_number(fundamental_row["DER"]), "Debt to Equity Ratio")
+    with f6:
+        metric_card("Current Ratio", format_number(fundamental_row["Current_Ratio"]), "Likuiditas")
+    with f7:
+        metric_card("Market Cap", format_number(fundamental_row["Market_Cap"]), "Kapitalisasi pasar")
+    with f8:
+        metric_card("Fundamental Score", f"{fundamental_row['Fundamental_Score']:.2f}", fundamental_row["Fundamental_Label"])
+
+    st.write("")
+    st.markdown(
+        f"""
+        <div class="glass-card">
+            <div class="metric-label">Kesimpulan Fundamental</div>
+            <div class="metric-value">{fundamental_row["Fundamental_Label"]}</div>
+            <div class="metric-small">
+                Skor fundamental dihitung dari kombinasi EPS, ROE, PBV, PER, DER, dan Current Ratio.
+                Nilai lebih tinggi menunjukkan kondisi fundamental yang lebih menarik.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# ======================================================
+# EXPLANATION TAB
+# ======================================================
+
+with tab4:
+    st.markdown('<div class="section-title">Alasan Rekomendasi</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-caption">Penjelasan dibuat sederhana agar mudah dipahami oleh investor pemula.</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        f"""
+        <div class="gold-card">
+            <div class="recommendation-title">Analisis Sistem</div>
+            <div class="recommendation-desc">{explanation}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.write("")
+
+    h1, h2, h3, h4 = st.columns(4)
+
+    with h1:
+        st.markdown(
+            """
+            <div class="step-box">
+                <div class="step-number">1</div>
+                <div class="step-title">Harga</div>
+                <div class="step-desc">Sistem membaca tren harga, return, moving average, dan volatilitas.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with h2:
+        st.markdown(
+            """
+            <div class="step-box">
+                <div class="step-number">2</div>
+                <div class="step-title">Emas Global</div>
+                <div class="step-desc">Harga emas global digunakan sebagai faktor pendukung saham sektor emas.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with h3:
+        st.markdown(
+            """
+            <div class="step-box">
+                <div class="step-number">3</div>
+                <div class="step-title">Sentimen</div>
+                <div class="step-desc">Judul berita terbaru dianalisis untuk melihat sentimen pasar.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with h4:
+        st.markdown(
+            """
+            <div class="step-box">
+                <div class="step-number">4</div>
+                <div class="step-title">Fundamental</div>
+                <div class="step-desc">Rasio perusahaan digunakan untuk menilai kekuatan dasar saham.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+# ======================================================
+# DISCLAIMER
+# ======================================================
+
+st.write("")
+st.markdown(
+    """
+    <div class="disclaimer">
+        <b>Disclaimer:</b> Aplikasi ini hanya digunakan sebagai alat bantu analisis dan edukasi.
+        Hasil rekomendasi bukan merupakan ajakan membeli atau menjual saham.
+        Keputusan investasi tetap menjadi tanggung jawab pengguna.
+    </div>
+    """,
+    unsafe_allow_html=True
+)
