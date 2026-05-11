@@ -380,6 +380,32 @@ st.markdown(
         color: #f7d774;
     }
 
+    .badge-low-risk { background: rgba(74, 222, 128, 0.15); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.3); }
+    .badge-med-risk { background: rgba(250, 204, 21, 0.15); color: #facc15; border: 1px solid rgba(250, 204, 21, 0.3); }
+    .badge-high-risk { background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
+    
+    .badge-overhyped { background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
+    .badge-watchout { background: rgba(251, 146, 60, 0.15); color: #fb923c; border: 1px solid rgba(251, 146, 60, 0.3); }
+    .badge-normal { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+    
+    .top-pick-card {
+        padding: 2.5rem 2rem;
+        border-radius: 24px;
+        background: linear-gradient(135deg, rgba(212, 175, 55, 0.15), rgba(15, 23, 42, 0.9));
+        border: 1px solid rgba(212, 175, 55, 0.4);
+        box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .top-pick-ticker {
+        font-size: 3.5rem;
+        font-weight: 900;
+        background: linear-gradient(135deg, #f7d774 0%, #d4af37 45%, #9a6b00 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin: 0.5rem 0;
+    }
+
     @media (max-width: 768px) {
         .hero-container {
             padding: 2rem 1.3rem;
@@ -1009,6 +1035,327 @@ def generate_explanation(ticker, recommendation, predicted_return, sentiment_lab
     )
 
 
+def calculate_risk_level(volatility, predicted_return, sentiment_score, fundamental_score, investment_goal):
+    """Menghitung Risk Level."""
+    risk_score = 50
+    
+    if fundamental_score >= 0.7:
+        risk_score -= 20
+    elif fundamental_score < 0.4:
+        risk_score += 30
+        
+    if volatility and not pd.isna(volatility):
+        if volatility > 0.05:
+            risk_score += 25
+        elif volatility < 0.02:
+            risk_score -= 10
+            
+    if sentiment_score < -0.1:
+        risk_score += 15
+    elif sentiment_score > 0.1:
+        risk_score -= 10
+        
+    if investment_goal == "Jangka Pendek":
+        risk_score += 10
+        
+    risk_score = max(0, min(100, risk_score))
+    
+    if risk_score <= 35:
+        level = "Low Risk"
+        reason = "Fundamental perusahaan tergolong solid, volatilitas stabil, dan tidak ada sentimen berita negatif yang signifikan."
+    elif risk_score <= 65:
+        level = "Medium Risk"
+        reason = "Kondisi pasar dan perusahaan cukup seimbang, namun ada beberapa faktor volatilitas atau sentimen yang perlu dipantau."
+    else:
+        level = "High Risk"
+        reason = "Fundamental yang kurang mendukung, dipadukan dengan sentimen negatif atau volatilitas tinggi, membuat risiko investasi sangat tinggi saat ini."
+        
+    return level, risk_score, reason
+
+
+def detect_overhyped_status(predicted_return, sentiment_score, news_count, fundamental_score):
+    """Mendeteksi Overhyped status."""
+    hype_score = 0
+    
+    if sentiment_score > 0.1: hype_score += 20
+    if sentiment_score > 0.3: hype_score += 20
+    if news_count > 10: hype_score += 15
+    if news_count > 20: hype_score += 15
+    if predicted_return > 0.05: hype_score += 20
+        
+    if fundamental_score >= 0.7: hype_score -= 40
+    elif fundamental_score < 0.4: hype_score += 20
+        
+    hype_score = max(0, min(100, hype_score))
+    
+    if hype_score >= 70:
+        status = "Overhyped"
+        reason = "Saham ini sedang sangat ramai diberitakan dan sentimennya sangat positif, namun tidak didukung skor fundamental yang sepadan. Harga mungkin naik hanya karena FOMO."
+    elif hype_score >= 45:
+        status = "Watch Out"
+        reason = "Saham mulai ramai dibicarakan dan sentimen positif. Fundamental masih cukup mendukung, tetapi tetap waspada terhadap potensi overbought."
+    else:
+        status = "Normal"
+        reason = "Pergerakan saham, jumlah berita, dan sentimen pasar masih berjalan wajar dan sejalan dengan fundamental perusahaan."
+        
+    return status, hype_score, reason
+
+
+# ======================================================
+# WATCHLIST & COMPARE LOGIC
+# ======================================================
+
+@st.cache_data(ttl=1800)
+def generate_watchlist():
+    watchlist_items = []
+    try:
+        gold_df = fetch_gold_data()
+        fund_df = load_fundamental_data()
+    except Exception:
+        return pd.DataFrame()
+    
+    for ticker_name, ticker_code in TICKER_MAP.items():
+        try:
+            stock_df = fetch_stock_data(ticker_code, period="6mo")
+            news_df = fetch_news(ticker_name)
+            
+            _, avg_score, sentiment_label, news_count = apply_sentiment(news_df)
+            
+            fund_row = fund_df[fund_df["Ticker"] == ticker_name]
+            if fund_row.empty:
+                continue
+            fund_dict = fund_row.iloc[0].to_dict()
+            
+            latest_row = prepare_latest_row(stock_df, gold_df, fund_dict, avg_score, news_count)
+            predicted_return, model_source = predict_return(latest_row)
+            
+            fundamental_score = fund_dict.get("Composite_Rank", 0)
+            fund_label = "Kuat / Good" if fundamental_score >= 0.5 else "Lemah / Weak"
+            
+            # Predict for Jangka Pendek default for watchlist
+            rec, risk, overall_score = generate_recommendation(
+                predicted_return, avg_score, fundamental_score, "Jangka Pendek"
+            )
+            
+            # Get Risk
+            risk_level, risk_score, _ = calculate_risk_level(latest_row.get("Volatility", 0), predicted_return, avg_score, fundamental_score, "Jangka Pendek")
+            
+            # Get Hype
+            hype_status, hype_score, _ = detect_overhyped_status(predicted_return, avg_score, news_count, fundamental_score)
+            
+            watchlist_items.append({
+                "Ticker": ticker_name,
+                "Company Name": COMPANY_NAMES.get(ticker_name, ticker_name),
+                "Close Price": latest_row["Close"],
+                "Daily Return": latest_row["Return"],
+                "Sentiment Label": sentiment_label,
+                "Sentiment Score": avg_score,
+                "Fundamental Score": fundamental_score,
+                "Fundamental Label": fund_label,
+                "Risk Level": risk_level,
+                "Hype Status": hype_status,
+                "Recommendation": rec,
+                "Overall Score": overall_score,
+                "Predicted Return": predicted_return
+            })
+        except Exception as e:
+            continue
+            
+    if not watchlist_items:
+        return pd.DataFrame()
+        
+    return pd.DataFrame(watchlist_items).sort_values("Overall Score", ascending=False).reset_index(drop=True)
+
+def get_top_recommendation(watchlist_df):
+    if watchlist_df is None or watchlist_df.empty:
+        return None
+        
+    candidates = watchlist_df[
+        (watchlist_df["Predicted Return"] > 0) & 
+        (watchlist_df["Risk Level"] != "High Risk") & 
+        (watchlist_df["Hype Status"] != "Overhyped")
+    ]
+    
+    if candidates.empty:
+        return watchlist_df.iloc[0]
+        
+    return candidates.sort_values("Overall Score", ascending=False).iloc[0]
+
+def compare_stocks(ticker_1, ticker_2, investment_goal, watchlist_df):
+    if watchlist_df is None or watchlist_df.empty:
+        return None, None, "Data belum tersedia."
+        
+    df1 = watchlist_df[watchlist_df["Ticker"] == ticker_1]
+    df2 = watchlist_df[watchlist_df["Ticker"] == ticker_2]
+    
+    if df1.empty or df2.empty:
+        return None, None, "Data untuk salah satu saham belum tersedia."
+        
+    stock1 = df1.iloc[0]
+    stock2 = df2.iloc[0]
+    
+    score1 = stock1["Overall Score"]
+    score2 = stock2["Overall Score"]
+    
+    if investment_goal == "Jangka Panjang":
+        score1 += stock1["Fundamental Score"] * 50
+        score2 += stock2["Fundamental Score"] * 50
+        if stock1["Risk Level"] == "High Risk": score1 -= 20
+        if stock2["Risk Level"] == "High Risk": score2 -= 20
+    else:
+        score1 += stock1["Sentiment Score"] * 20 + stock1["Predicted Return"] * 100
+        score2 += stock2["Sentiment Score"] * 20 + stock2["Predicted Return"] * 100
+        
+    winner = ticker_1 if score1 > score2 else ticker_2
+    loser = ticker_2 if winner == ticker_1 else ticker_1
+    
+    reason = f"Berdasarkan perbandingan, {winner} lebih unggul untuk {investment_goal} karena memiliki skor keseluruhan yang lebih baik dengan fundamental dan sentimen yang mendukung. Sementara {loser} lebih cocok dipantau karena memiliki risiko yang sedikit lebih tinggi atau skor fundamental yang lebih rendah."
+        
+    return pd.concat([df1, df2]), winner, reason
+
+
+
+# ======================================================
+# UI COMPONENTS
+# ======================================================
+
+def render_market_news():
+    # MARKET NEWS & TRENDS UI
+
+    st.markdown('<div class="section-title">🌍 Market News & Trends</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-caption">Pantau berita emas, ekonomi, IHSG, komoditas, dan tren pasar terbaru dalam satu tempat.</div>',
+        unsafe_allow_html=True
+    )
+
+    mn_col1, mn_col2 = st.columns([1, 1])
+
+    with mn_col1:
+        market_category = st.selectbox(
+            "Kategori Berita",
+            options=list(MARKET_NEWS_CATEGORIES.keys()),
+            index=0
+        )
+
+    with mn_col2:
+        market_search = st.text_input("Cari berita (misalnya: inflasi, IHSG, The Fed)", "")
+
+    with st.spinner("Mengambil berita pasar terbaru..."):
+        # Fetch and process market news
+        raw_market_news_df = fetch_market_news(market_category)
+
+        # Filter by search
+        if market_search:
+            market_news_df = raw_market_news_df[raw_market_news_df['Title'].str.contains(market_search, case=False, na=False)].copy()
+        else:
+            market_news_df = raw_market_news_df.copy()
+
+        market_news_df, market_avg_score, market_label = apply_market_sentiment(market_news_df)
+        trending_topics = get_trending_topics(market_news_df)
+        market_insight = generate_market_insight(market_label, market_avg_score, market_category)
+
+    if market_news_df.empty:
+        st.warning("Berita market terbaru belum tersedia atau tidak ditemukan. Silakan coba beberapa saat lagi atau ubah kata kunci.")
+    else:
+        # Summary Cards
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            metric_card("Market Mood", market_label, f"Avg Score: {market_avg_score:.2f}")
+        with m2:
+            metric_card("Total News", str(len(market_news_df)), "Berita ditemukan")
+        with m3:
+            top_cat = market_news_df['Category'].value_counts().index[0] if not market_news_df.empty else "-"
+            metric_card("Top Category", top_cat, "Kategori Terbanyak")
+        with m4:
+            pos_count = len(market_news_df[market_news_df['Sentiment_Label'] == 'Positive'])
+            neg_count = len(market_news_df[market_news_df['Sentiment_Label'] == 'Negative'])
+            metric_card("Sentiment Spread", f"{pos_count} Pos / {neg_count} Neg", "Sebaran Berita")
+
+        st.write("")
+
+        # Charts
+        mc1, mc2 = st.columns(2)
+        with mc1:
+            sentiment_chart = create_market_sentiment_chart(market_news_df)
+            if sentiment_chart:
+                st.plotly_chart(sentiment_chart, use_container_width=True)
+        with mc2:
+            category_chart = create_category_bar_chart(market_news_df)
+            if category_chart:
+                st.plotly_chart(category_chart, use_container_width=True)
+
+        st.write("")
+
+        # Trending Topics & Insight
+        ti1, ti2 = st.columns([1, 1.5])
+        with ti1:
+            st.markdown(
+                f"""
+                <div class="glass-card">
+                    <div class="metric-label">🔥 Trending Topics</div>
+                    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">
+                        {''.join([f'<span class="mini-chip">{topic}</span>' for topic in trending_topics])}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True
+            )
+        with ti2:
+            st.markdown(
+                f"""
+                <div class="gold-card">
+                    <div class="recommendation-title">Market Insight Explanation</div>
+                    <div class="step-desc" style="color:#ffffff;">{market_insight}</div>
+                </div>
+                """, unsafe_allow_html=True
+            )
+
+        st.write("")
+        st.markdown('<div class="metric-label" style="font-size:1.1rem;">Latest Market News</div>', unsafe_allow_html=True)
+
+        for _, row in market_news_df.head(10).iterrows():
+            date_text = row["Date"].strftime("%d %b %Y") if pd.notna(row["Date"]) else "-"
+            label = row.get("Sentiment_Label", "Neutral")
+            score = row.get("Sentiment_Score", 0)
+
+            st.markdown(
+                f"""
+                <div class="news-card">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                        <div class="news-title" style="flex:1;">{row["Title"]}</div>
+                        <span class="badge {'badge-green' if label == 'Positive' else 'badge-red' if label == 'Negative' else 'badge-blue'}" style="margin-top:0; margin-left:10px;">{label}</span>
+                    </div>
+                    <div class="news-meta">{date_text} • {row["Source"]} • Kategori: {row["Category"]} ({score:.2f})</div>
+                    <a class="news-link" href="{row["Link"]}" target="_blank">Baca berita →</a>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+    st.write("")
+    st.markdown("---")
+    st.write("")
+
+
+
+def render_watchlist(watchlist_df):
+    if watchlist_df is not None and not watchlist_df.empty:
+        st.markdown('<div class="section-title">📌 Watchlist Saham</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-caption">Perbandingan cepat performa seluruh saham emas hari ini.</div>', unsafe_allow_html=True)
+        
+        display_cols = ["Ticker", "Close Price", "Daily Return", "Sentiment Label", "Fundamental Label", "Risk Level", "Hype Status", "Recommendation", "Overall Score"]
+        
+        st.dataframe(
+            watchlist_df[display_cols].style.format({
+                "Close Price": "{:,.0f}",
+                "Daily Return": "{:.2%}",
+                "Overall Score": "{:.1f}"
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+        st.write("")
+
+
 # ======================================================
 # CHARTS
 # ======================================================
@@ -1124,123 +1471,6 @@ st.write("")
 
 
 # ======================================================
-# MARKET NEWS & TRENDS UI
-# ======================================================
-
-st.markdown('<div class="section-title">🌍 Market News & Trends</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="section-caption">Pantau berita emas, ekonomi, IHSG, komoditas, dan tren pasar terbaru dalam satu tempat.</div>',
-    unsafe_allow_html=True
-)
-
-mn_col1, mn_col2 = st.columns([1, 1])
-
-with mn_col1:
-    market_category = st.selectbox(
-        "Kategori Berita",
-        options=list(MARKET_NEWS_CATEGORIES.keys()),
-        index=0
-    )
-
-with mn_col2:
-    market_search = st.text_input("Cari berita (misalnya: inflasi, IHSG, The Fed)", "")
-
-with st.spinner("Mengambil berita pasar terbaru..."):
-    # Fetch and process market news
-    raw_market_news_df = fetch_market_news(market_category)
-    
-    # Filter by search
-    if market_search:
-        market_news_df = raw_market_news_df[raw_market_news_df['Title'].str.contains(market_search, case=False, na=False)].copy()
-    else:
-        market_news_df = raw_market_news_df.copy()
-        
-    market_news_df, market_avg_score, market_label = apply_market_sentiment(market_news_df)
-    trending_topics = get_trending_topics(market_news_df)
-    market_insight = generate_market_insight(market_label, market_avg_score, market_category)
-
-if market_news_df.empty:
-    st.warning("Berita market terbaru belum tersedia atau tidak ditemukan. Silakan coba beberapa saat lagi atau ubah kata kunci.")
-else:
-    # Summary Cards
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        metric_card("Market Mood", market_label, f"Avg Score: {market_avg_score:.2f}")
-    with m2:
-        metric_card("Total News", str(len(market_news_df)), "Berita ditemukan")
-    with m3:
-        top_cat = market_news_df['Category'].value_counts().index[0] if not market_news_df.empty else "-"
-        metric_card("Top Category", top_cat, "Kategori Terbanyak")
-    with m4:
-        pos_count = len(market_news_df[market_news_df['Sentiment_Label'] == 'Positive'])
-        neg_count = len(market_news_df[market_news_df['Sentiment_Label'] == 'Negative'])
-        metric_card("Sentiment Spread", f"{pos_count} Pos / {neg_count} Neg", "Sebaran Berita")
-
-    st.write("")
-    
-    # Charts
-    mc1, mc2 = st.columns(2)
-    with mc1:
-        sentiment_chart = create_market_sentiment_chart(market_news_df)
-        if sentiment_chart:
-            st.plotly_chart(sentiment_chart, use_container_width=True)
-    with mc2:
-        category_chart = create_category_bar_chart(market_news_df)
-        if category_chart:
-            st.plotly_chart(category_chart, use_container_width=True)
-
-    st.write("")
-    
-    # Trending Topics & Insight
-    ti1, ti2 = st.columns([1, 1.5])
-    with ti1:
-        st.markdown(
-            f"""
-            <div class="glass-card">
-                <div class="metric-label">🔥 Trending Topics</div>
-                <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">
-                    {''.join([f'<span class="mini-chip">{topic}</span>' for topic in trending_topics])}
-                </div>
-            </div>
-            """, unsafe_allow_html=True
-        )
-    with ti2:
-        st.markdown(
-            f"""
-            <div class="gold-card">
-                <div class="recommendation-title">Market Insight Explanation</div>
-                <div class="step-desc" style="color:#ffffff;">{market_insight}</div>
-            </div>
-            """, unsafe_allow_html=True
-        )
-
-    st.write("")
-    st.markdown('<div class="metric-label" style="font-size:1.1rem;">Latest Market News</div>', unsafe_allow_html=True)
-    
-    for _, row in market_news_df.head(10).iterrows():
-        date_text = row["Date"].strftime("%d %b %Y") if pd.notna(row["Date"]) else "-"
-        label = row.get("Sentiment_Label", "Neutral")
-        score = row.get("Sentiment_Score", 0)
-        
-        st.markdown(
-            f"""
-            <div class="news-card">
-                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                    <div class="news-title" style="flex:1;">{row["Title"]}</div>
-                    <span class="badge {'badge-green' if label == 'Positive' else 'badge-red' if label == 'Negative' else 'badge-blue'}" style="margin-top:0; margin-left:10px;">{label}</span>
-                </div>
-                <div class="news-meta">{date_text} • {row["Source"]} • Kategori: {row["Category"]} ({score:.2f})</div>
-                <a class="news-link" href="{row["Link"]}" target="_blank">Baca berita →</a>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-st.write("")
-st.markdown("---")
-st.write("")
-
-# ======================================================
 # INPUT SECTION
 # ======================================================
 
@@ -1265,6 +1495,13 @@ with input_col2:
         options=["Jangka Pendek", "Jangka Panjang"],
         index=1
     )
+    st.markdown(
+        '''
+        <div style="font-size: 0.82rem; color: #94a3b8; margin-top: 5px; padding-left: 2px;">
+            <i style="color: #cbd5e1;"><b>Jangka Pendek:</b> 1 hr - 1 bln</i> &nbsp;|&nbsp; <i style="color: #cbd5e1;"><b>Jangka Panjang:</b> 6 bln - 1 thn+</i>
+        </div>
+        ''', unsafe_allow_html=True
+    )
 
 with input_col3:
     st.write("")
@@ -1276,21 +1513,34 @@ with input_col3:
 # ======================================================
 
 if not analyze_button:
-    st.markdown(
-        """
-        <div class="gold-card">
-            <div class="recommendation-title">Mulai Analisis</div>
-            <div class="recommendation-main">Pilih Saham</div>
-            <div class="recommendation-desc">
-                Klik tombol <b>Analisis Saham Sekarang</b> untuk mengambil data harga terbaru,
-                membaca berita, menghitung sentimen, dan menghasilkan rekomendasi investasi.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
     st.write("")
+    with st.spinner("Memuat Top Pick & Watchlist (Data Real-time)..."):
+        watchlist_df = generate_watchlist()
+        top_pick = get_top_recommendation(watchlist_df)
+    
+    if top_pick is not None and len(top_pick) > 0:
+        st.markdown(
+            f'''
+            <div class="top-pick-card">
+                <div style="color: #f7d774; font-size: 1.1rem; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;">🌟 Top Recommendation Today</div>
+                <div class="top-pick-ticker">{top_pick["Ticker"]}</div>
+                <div style="color: #cbd5e1; font-size: 1.1rem; margin-bottom: 1rem;">{top_pick["Company Name"]}</div>
+                <div style="display: flex; justify-content: center; gap: 15px; margin-bottom: 1rem;">
+                    <span class="badge badge-green">Overall Score: {top_pick["Overall Score"]:.1f}</span>
+                    <span class="badge badge-blue">Predicted Return: {top_pick["Predicted Return"]*100:.2f}%</span>
+                </div>
+                <div style="color: #94a3b8; font-size: 0.95rem; max-width: 600px; margin: 0 auto; line-height: 1.5;">
+                    Berdasarkan analisis real-time, {top_pick["Ticker"]} memiliki kombinasi fundamental <b>{top_pick["Fundamental Label"]}</b>, sentimen <b>{top_pick["Sentiment Label"]}</b>, dan risiko <b>{top_pick["Risk Level"]}</b> yang optimal hari ini.
+                </div>
+            </div>
+            ''', unsafe_allow_html=True
+        )
+        
+    render_watchlist(watchlist_df)
+    st.markdown("---")
+    render_market_news()
+    st.markdown("---")
+    
     st.markdown('<div class="section-title">Cara Kerja Sistem</div>', unsafe_allow_html=True)
 
     step1, step2, step3, step4 = st.columns(4)
@@ -1395,6 +1645,9 @@ with st.spinner("Sedang mengambil data terbaru dan menjalankan analisis..."):
             fundamental_label=fund_label,
             investment_goal=investment_goal
         )
+        
+        risk_level_str, risk_score, risk_reason = calculate_risk_level(latest_row.get("Volatility", 0), predicted_return, avg_sentiment_score, fundamental_row["Composite_Rank"], investment_goal)
+        hype_status, hype_score, hype_reason = detect_overhyped_status(predicted_return, avg_sentiment_score, news_count, fundamental_row["Composite_Rank"])
 
     except Exception as e:
         st.error(f"Analisis gagal dijalankan: {e}")
@@ -1404,6 +1657,17 @@ with st.spinner("Sedang mengambil data terbaru dan menjalankan analisis..."):
 # ======================================================
 # RESULT SUMMARY
 # ======================================================
+
+
+def get_risk_badge(level):
+    if level == "Low Risk": return "badge-low-risk"
+    if level == "Medium Risk": return "badge-med-risk"
+    return "badge-high-risk"
+
+def get_hype_badge(status):
+    if status == "Normal": return "badge-normal"
+    if status == "Watch Out": return "badge-watchout"
+    return "badge-overhyped"
 
 st.write("")
 badge_class = get_badge_class(recommendation)
@@ -1422,7 +1686,11 @@ with summary_left:
                 Tujuan investasi: <b>{investment_goal}</b><br>
                 Sumber prediksi: <b>{model_source}</b>
             </div>
-            <div class="badge {badge_class}">{risk_level}</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+                <div class="badge {badge_class}">{recommendation}</div>
+                <div class="badge {get_risk_badge(risk_level_str)}">{risk_level_str}</div>
+                <div class="badge {get_hype_badge(hype_status)}">{hype_status}</div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True
@@ -1449,11 +1717,15 @@ with summary_right:
 # ======================================================
 
 st.write("")
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📈 Harga Saham",
     "📰 Sentimen Berita",
     "🏦 Fundamental",
-    "🧠 Alasan Rekomendasi"
+    "🧠 Alasan Rekomendasi",
+    "🚨 Risk & Hype Detector",
+    "⚖️ Compare Stocks",
+    "🌍 Market News",
+    "📌 Full Watchlist"
 ])
 
 
@@ -1686,3 +1958,97 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+        
+
+
+with tab5:
+    st.markdown('<div class="section-title">Risk & Hype Detector</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-caption">Analisis risiko volatilitas dan deteksi FOMO pasar.</div>', unsafe_allow_html=True)
+    
+    rt1, rt2 = st.columns(2)
+    with rt1:
+        st.markdown(
+            f'''
+            <div class="glass-card" style="border-top: 4px solid {'#f87171' if risk_level_str == 'High Risk' else '#facc15' if risk_level_str == 'Medium Risk' else '#4ade80'};">
+                <div class="metric-label">Risk Level: <span class="badge {get_risk_badge(risk_level_str)}">{risk_level_str}</span></div>
+                <div class="metric-value">{risk_score:.0f}/100</div>
+                <div class="step-desc" style="margin-top: 10px;">{risk_reason}</div>
+            </div>
+            ''', unsafe_allow_html=True
+        )
+    with rt2:
+        st.markdown(
+            f'''
+            <div class="glass-card" style="border-top: 4px solid {'#f87171' if hype_status == 'Overhyped' else '#fb923c' if hype_status == 'Watch Out' else '#38bdf8'};">
+                <div class="metric-label">Hype Status: <span class="badge {get_hype_badge(hype_status)}">{hype_status}</span></div>
+                <div class="metric-value">{hype_score:.0f}/100</div>
+                <div class="step-desc" style="margin-top: 10px;">{hype_reason}</div>
+            </div>
+            ''', unsafe_allow_html=True
+        )
+
+with tab6:
+    st.markdown('<div class="section-title">⚖️ Compare Stocks</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-caption">Bandingkan saham ini dengan saham emas lainnya.</div>', unsafe_allow_html=True)
+    
+    compare_ticker = st.selectbox(
+        "Pilih saham pembanding:",
+        options=[t for t in TICKER_MAP.keys() if t != selected_ticker],
+        index=0
+    )
+    
+    if st.button("Bandingkan"):
+        with st.spinner(f"Membandingkan {selected_ticker} dengan {compare_ticker}..."):
+            watchlist_df = generate_watchlist()
+            comp_df, winner, comp_reason = compare_stocks(selected_ticker, compare_ticker, investment_goal, watchlist_df)
+            
+            if comp_df is not None:
+                st.markdown(f'''
+                    <div class="gold-card" style="text-align: center; margin-top: 1rem;">
+                        <h3 style="color: #f7d774; margin-bottom: 5px;">Pemenang: {winner}</h3>
+                        <p style="color: #cbd5e1; font-size: 0.95rem;">{comp_reason}</p>
+                    </div>
+                ''', unsafe_allow_html=True)
+                
+                # Show side-by-side comparison
+                c1, c2 = st.columns(2)
+                stock1_data = comp_df[comp_df["Ticker"] == selected_ticker].iloc[0]
+                stock2_data = comp_df[comp_df["Ticker"] == compare_ticker].iloc[0]
+                
+                with c1:
+                    st.markdown(f'''
+                        <div class="glass-card" style="border: {'2px solid #d4af37' if winner == selected_ticker else '1px solid rgba(148, 163, 184, 0.16)'};">
+                            <h2 style="color: #f7d774; text-align: center;">{selected_ticker}</h2>
+                            <hr style="border-color: rgba(255,255,255,0.1);">
+                            <p><b>Overall Score:</b> {stock1_data["Overall Score"]:.1f}</p>
+                            <p><b>Predicted Return:</b> {stock1_data["Predicted Return"]*100:.2f}%</p>
+                            <p><b>Sentiment:</b> <span class="badge badge-blue">{stock1_data["Sentiment Label"]}</span></p>
+                            <p><b>Fundamental:</b> {stock1_data["Fundamental Label"]}</p>
+                            <p><b>Risk Level:</b> <span class="badge {get_risk_badge(stock1_data["Risk Level"])}">{stock1_data["Risk Level"]}</span></p>
+                            <p><b>Hype Status:</b> <span class="badge {get_hype_badge(stock1_data["Hype Status"])}">{stock1_data["Hype Status"]}</span></p>
+                            <p><b>Rekomendasi:</b> <span class="badge {get_badge_class(stock1_data["Recommendation"])}">{stock1_data["Recommendation"]}</span></p>
+                        </div>
+                    ''', unsafe_allow_html=True)
+                
+                with c2:
+                    st.markdown(f'''
+                        <div class="glass-card" style="border: {'2px solid #d4af37' if winner == compare_ticker else '1px solid rgba(148, 163, 184, 0.16)'};">
+                            <h2 style="color: #f7d774; text-align: center;">{compare_ticker}</h2>
+                            <hr style="border-color: rgba(255,255,255,0.1);">
+                            <p><b>Overall Score:</b> {stock2_data["Overall Score"]:.1f}</p>
+                            <p><b>Predicted Return:</b> {stock2_data["Predicted Return"]*100:.2f}%</p>
+                            <p><b>Sentiment:</b> <span class="badge badge-blue">{stock2_data["Sentiment Label"]}</span></p>
+                            <p><b>Fundamental:</b> {stock2_data["Fundamental Label"]}</p>
+                            <p><b>Risk Level:</b> <span class="badge {get_risk_badge(stock2_data["Risk Level"])}">{stock2_data["Risk Level"]}</span></p>
+                            <p><b>Hype Status:</b> <span class="badge {get_hype_badge(stock2_data["Hype Status"])}">{stock2_data["Hype Status"]}</span></p>
+                            <p><b>Rekomendasi:</b> <span class="badge {get_badge_class(stock2_data["Recommendation"])}">{stock2_data["Recommendation"]}</span></p>
+                        </div>
+                    ''', unsafe_allow_html=True)
+
+with tab7:
+    render_market_news()
+
+with tab8:
+    watchlist_df_tab = generate_watchlist()
+    render_watchlist(watchlist_df_tab)
+

@@ -186,3 +186,87 @@ def _build_explanation(ticker, final_rec, ret_pct, sentiment_score,
         )
 
     return f"{ret_desc}. {sent_desc}. {fund_desc}.\n\n{rec_sentence}{downgrade_note}"
+
+
+def calculate_risk_level(volatility, predicted_return, sentiment_score, fundamental_score, investment_goal):
+    """
+    Menghitung Risk Level berdasarkan volatilitas, fundamental, sentimen, dan tujuan investasi.
+    """
+    risk_score = 50
+    
+    # Fundamental is the strongest anchor for risk
+    if fundamental_score >= 0.7:
+        risk_score -= 20
+    elif fundamental_score < 0.4:
+        risk_score += 30
+        
+    # Volatility adds to risk
+    if volatility and not pd.isna(volatility):
+        if volatility > 0.05:
+            risk_score += 25
+        elif volatility < 0.02:
+            risk_score -= 10
+            
+    # Sentiment modifier
+    if sentiment_score < -0.1:
+        risk_score += 15
+    elif sentiment_score > 0.1:
+        risk_score -= 10
+        
+    # Horizon modifier
+    if investment_goal == "Jangka Pendek":
+        risk_score += 10 # Short term is inherently slightly riskier
+        
+    risk_score = max(0, min(100, risk_score))
+    
+    if risk_score <= 35:
+        level = "Low Risk"
+        reason = "Fundamental perusahaan tergolong solid, volatilitas stabil, dan tidak ada sentimen berita negatif yang signifikan."
+    elif risk_score <= 65:
+        level = "Medium Risk"
+        reason = "Kondisi pasar dan perusahaan cukup seimbang, namun ada beberapa faktor volatilitas atau sentimen yang perlu dipantau."
+    else:
+        level = "High Risk"
+        reason = "Fundamental yang kurang mendukung, dipadukan dengan sentimen negatif atau volatilitas tinggi, membuat risiko investasi sangat tinggi saat ini."
+        
+    return level, risk_score, reason
+
+
+def detect_overhyped_status(predicted_return, sentiment_score, news_count, fundamental_score):
+    """
+    Mendeteksi apakah saham overhyped, watch out, atau normal.
+    """
+    hype_score = 0
+    
+    if sentiment_score > 0.1:
+        hype_score += 20
+    if sentiment_score > 0.3:
+        hype_score += 20
+        
+    if news_count > 10:
+        hype_score += 15
+    if news_count > 20:
+        hype_score += 15
+        
+    if predicted_return > 0.05:
+        hype_score += 20
+        
+    # High fundamental score reduces hype score (it's justified, not just hype)
+    if fundamental_score >= 0.7:
+        hype_score -= 40
+    elif fundamental_score < 0.4:
+        hype_score += 20
+        
+    hype_score = max(0, min(100, hype_score))
+    
+    if hype_score >= 70:
+        status = "Overhyped"
+        reason = "Saham ini sedang sangat ramai diberitakan dan sentimennya sangat positif, namun tidak didukung oleh skor fundamental yang sepadan. Harga mungkin naik hanya karena FOMO."
+    elif hype_score >= 45:
+        status = "Watch Out"
+        reason = "Saham mulai ramai dibicarakan dan sentimen cenderung positif. Fundamental masih cukup mendukung, tetapi investor tetap harus waspada terhadap potensi overbought."
+    else:
+        status = "Normal"
+        reason = "Pergerakan saham, jumlah berita, dan sentimen pasar masih berjalan wajar dan sejalan dengan kondisi fundamental perusahaan."
+        
+    return status, hype_score, reason
