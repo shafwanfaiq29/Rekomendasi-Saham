@@ -1725,6 +1725,9 @@ if not analyze_button:
 with st.spinner("Sedang mengambil data terbaru dan menjalankan analisis..."):
     time.sleep(0.7)
 
+    risk_level_str, risk_score, risk_reason = "Normal", 0, "Belum ada analisis"
+    hype_status, hype_score, hype_reason = "Normal", 0, "Belum ada analisis"
+
     try:
         fundamental_df = load_fundamental_data()
         ticker_fundamental = fundamental_df[fundamental_df["Ticker"] == selected_ticker]
@@ -1775,9 +1778,23 @@ with st.spinner("Sedang mengambil data terbaru dan menjalankan analisis..."):
             fundamental_label=fund_label,
             investment_goal=investment_goal
         )
+
+        # JARING PENGAMAN: Pastiin variabel ini eksis sebelum dilempar ke UI
+        # Kadang kalau data fundamentalnya kosong, dia gak muncul di UI
+        risk_level_str, risk_score, risk_reason = calculate_risk_level(
+            latest_row.get("Volatility", 0), 
+            predicted_return, 
+            avg_sentiment_score, 
+            fundamental_row["Composite_Rank"], 
+            investment_goal
+        )
         
-        risk_level_str, risk_score, risk_reason = calculate_risk_level(latest_row.get("Volatility", 0), predicted_return, avg_sentiment_score, fundamental_row["Composite_Rank"], investment_goal)
-        hype_status, hype_score, hype_reason = detect_overhyped_status(predicted_return, avg_sentiment_score, news_count, fundamental_row["Composite_Rank"])
+        hype_status, hype_score, hype_reason = detect_overhyped_status(
+            predicted_return, 
+            avg_sentiment_score, 
+            news_count, 
+            fundamental_row["Composite_Rank"]
+        )
 
     except Exception as e:
         st.error(f"Analisis gagal dijalankan: {e}")
