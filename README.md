@@ -1,91 +1,55 @@
-# GoldStock Insight 🥇
+# GoldStock Insight
 
-**Sistem Rekomendasi Saham Sektor Emas Berbasis Harga, Sentimen Berita, dan Fundamental**
+**Sistem Rekomendasi Saham Sektor Emas Berbasis Machine Learning, Sentimen IndoBERT, dan Fundamental.**
 
-GoldStock Insight adalah web app berbasis data science yang berfungsi sebagai sistem pendukung keputusan investasi untuk saham sektor emas di Indonesia (ANTM, MDKA, BRMS). Aplikasi ini membantu investor pemula menganalisis saham secara komprehensif menggunakan:
-- **Data Historis Harga Saham** (Real-time dari yfinance)
-- **Sentimen Berita Terbaru** (Google News RSS + Rule-based NLP)
-- **Data Fundamental Perusahaan** (Dari laporan keuangan)
+GoldStock Insight adalah aplikasi *Decision Support System* yang diperuntukkan bagi investor pasar modal Indonesia untuk emiten emas (ANTM, MDKA, BRMS, PSAB). Aplikasi ini memadukan teknologi *Data Science* mutakhir dalam sebuah dasbor interaktif *real-time*.
+
+## Arsitektur Teknologi
+
+- **Time-Series Prediction**: Model prediksi berbasis *Stacking Ensemble* yang mengintegrasikan Deep Learning **GRU (Gated Recurrent Unit)** dengan Algoritma Tree-Based **XGBoost**.
+- **Natural Language Processing (NLP)**: Pemrosesan judul berita *live* menggunakan **IndoBERT** (`mdhugol/indonesia-bert-sentiment-classification`) dari Hugging Face yang dikalibrasi dengan bobot probabilitas *Hybrid Lexicon*.
+- **Decision Engine**: Menggunakan teori sistem pakar **Fuzzy Inference System (Logika Mamdani)** via `scikit-fuzzy` untuk menentukan rekomendasi akhir secara obyektif.
 
 ## Fitur Utama
 
-- **Real-time Data Fetching**: Mengambil data harga saham dan emas terkini secara otomatis.
-- **Sentiment Analysis**: Scraping dan analisis sentimen berita terbaru terkait saham yang dipilih.
-- **Machine Learning Prediction**: Prediksi return saham menggunakan model *Random Forest Regressor*.
-- **Recommendation Engine**: Menghasilkan rekomendasi investasi (Jangka Pendek, Jangka Panjang, Hindari) beserta alasan yang mudah dipahami.
-- **Interactive Dashboard**: Visualisasi harga saham, sentimen, dan fundamental dalam satu layar.
+1. **Dashboard Hibrida**: Menampilkan grafik *Moving Average*, volatilitas, berita pasar (*Market Mood*), rasio fundamental, dan prediksi probabilitas kenaikan secara bersamaan.
+2. **Investment Return Simulator**: Fitur penaksir performa portofolio berdasarkan modal, rentang investasi, dan prediksi model AI.
+3. **Risk & FOMO Detector**: Pendeteksi saham *Overhyped* dengan menimbang besaran bobot berita dibandingkan valuasi fundamental riil perusahaan.
+4. **Compare Stocks**: Penilaian perbandingan *head-to-head* antar emiten emas.
 
-## Persyaratan Sistem
+## Panduan Instalasi (Development)
 
-- Python 3.9 atau lebih baru
-- Koneksi internet (untuk mengambil data dari yfinance dan Google News)
+1. **Clone repository ini**
+```bash
+   git clone https://github.com/shafwanfaiq29/Rekomendasi-Saham.git
+   cd goldstock-insight
 
-## Cara Instalasi dan Penggunaan
+```
 
-1. **Clone repositori ini atau ekstrak folder proyek:**
-   ```bash
-   # Masuk ke direktori proyek
-   cd "goldstock-insight"
-   ```
+2. **Gunakan Python 3.9+ dan aktifkan Virtual Environment**
 
-2. **Buat dan aktifkan virtual environment (opsional namun direkomendasikan):**
-   ```bash
+```bash
    python -m venv venv
-   # Windows:
+   # Pengguna Windows:
    venv\Scripts\activate
-   # Mac/Linux:
+   # Pengguna Linux/Mac:
    source venv/bin/activate
-   ```
 
-3. **Install dependensi:**
-   ```bash
+```
+
+3. **Install *dependencies* utama**
+Aplikasi ini memerlukan paket-paket khusus seperti `transformers`, `torch`, `xgboost`, `tensorflow`, dan `scikit-fuzzy`.
+
+```bash
    pip install -r requirements.txt
-   ```
 
-4. **Siapkan Data Fundamental:**
-   Pastikan file `data/fundamental_clean.csv` sudah berisi data fundamental terbaru perusahaan. (File dummy sudah tersedia sebagai contoh).
+```
 
-5. **Latih Model Machine Learning:**
-   Sebelum menjalankan web app untuk pertama kali, latih model Random Forest:
-   ```bash
-   python train_model.py
-   ```
-   *Proses ini akan mengumpulkan data historis 2 tahun terakhir dan membuat file `models/rf_model.pkl`.*
+4. **Pastikan Folder Direktori Lengkap**
+Agar model ML dan NLP berfungsi tanpa memicu sistem *fallback* (rule-based), Anda harus memastikan *weight* model (.pkl, .h5, .json) diletakkan di dalam *folder* `models/` dan data rasio di dalam *folder* `data/`.
+5. **Jalankan Aplikasi Streamlit**
 
-6. **Jalankan Aplikasi Streamlit:**
-   ```bash
+```bash
    streamlit run app.py
-   ```
-
-7. Buka browser dan akses URL lokal yang tertera (biasanya `http://localhost:8501`).
-
-## Struktur Proyek
 
 ```
-goldstock-insight/
-│
-├── app.py                  # File utama aplikasi Streamlit
-├── train_model.py          # Script untuk melatih model Random Forest
-├── requirements.txt        # Daftar dependensi library Python
-├── PRD.md                  # Dokumen Product Requirements
-├── Claude.md               # Dokumen Rencana Pelaksanaan
-├── README.md               # File dokumentasi ini
-│
-├── data/
-│   └── fundamental_clean.csv # Data metrik fundamental (PER, PBV, ROE, dll)
-│
-├── models/
-│   └── rf_model.pkl        # Model prediksi yang sudah dilatih (dihasilkan oleh train_model.py)
-│
-└── utils/                  # Modul-modul utilitas
-    ├── __init__.py
-    ├── fetch_stock.py      # Pengambilan data yfinance
-    ├── fetch_news.py       # Scraping RSS Google News
-    ├── sentiment.py        # Analisis sentimen berita
-    ├── feature_engineering.py # Perhitungan indikator teknikal & fitur
-    └── recommendation.py   # Mesin logika rekomendasi akhir
-```
-
-## Disclaimer
-
-Aplikasi ini dibangun untuk keperluan edukasi dan *Capstone Project*. Semua rekomendasi, prediksi, dan skor yang dihasilkan **bukanlah nasihat keuangan (financial advice)**. Segala keputusan investasi sepenuhnya merupakan tanggung jawab pengguna.
