@@ -1,4 +1,4 @@
-# Claude.md — Rencana Pelaksanaan GoldStock Insight
+# Rencana Pelaksanaan GoldStock Insight
 
 > **Sistem Rekomendasi Saham Sektor Emas Berbasis Harga, Sentimen Berita IndoBERT, Model Machine Learning Stacking (XGBoost & GRU), dan Logika Fuzzy Mamdani.**
 
