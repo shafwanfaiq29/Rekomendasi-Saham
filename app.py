@@ -672,15 +672,19 @@ def fetch_news(ticker):
     news_items = []
 
     for keyword in NEWS_KEYWORDS.get(ticker, []):
-        query = quote(keyword)
+        query = quote(f"{keyword} when:30d")
         url = f"https://news.google.com/rss/search?q={query}&hl=id&gl=ID&ceid=ID:id"
         feed = feedparser.parse(url)
 
         for entry in feed.entries[:15]:
+            judul_kotor = entry.title if "title" in entry else ""
+            # Buang nama portal di akhir judul (e.g. " - Kompas.com")
+            judul_bersih_portal = judul_kotor.rsplit(" - ", 1)[0] if " - " in judul_kotor else judul_kotor
+
             news_items.append({
                 "Ticker": ticker,
                 "Keyword": keyword,
-                "Title": entry.title if "title" in entry else "",
+                "Title": judul_bersih_portal,
                 "Published": entry.published if "published" in entry else None,
                 "Source": entry.source.title if "source" in entry else "Google News",
                 "Link": entry.link if "link" in entry else ""
@@ -689,13 +693,13 @@ def fetch_news(ticker):
     news_df = pd.DataFrame(news_items)
 
     if news_df.empty:
-        return pd.DataFrame(columns=["Date", "Ticker", "Title", "Source", "Link"])
+        return pd.DataFrame(columns=["Date", "Tanggal", "Ticker", "Title", "Source", "Link"])
 
     news_df["Published"] = pd.to_datetime(news_df["Published"], errors="coerce")
-    news_df["Date"] = news_df["Published"].dt.date
-    news_df["Date"] = pd.to_datetime(news_df["Date"], errors="coerce")
+    news_df["Date"] = news_df["Published"].dt.normalize()   # datetime (untuk display)
+    news_df["Tanggal"] = news_df["Published"].dt.date       # date object (untuk groupby agregasi harian)
     news_df = news_df.dropna(subset=["Title"]).drop_duplicates(subset=["Title"])
-    news_df = news_df[["Date", "Ticker", "Title", "Source", "Link"]]
+    news_df = news_df[["Date", "Tanggal", "Ticker", "Title", "Source", "Link"]]
     news_df = news_df.sort_values("Date", ascending=False).reset_index(drop=True)
 
     return news_df
@@ -705,62 +709,208 @@ def fetch_news(ticker):
 # SENTIMENT
 # ======================================================
 
-POSITIVE_WORDS = [
-    "naik", "menguat", "positif", "cuan", "untung", "laba", "melonjak",
-    "tumbuh", "meningkat", "rekor", "prospek", "bagus", "cerah",
-    "buy", "akumulasi", "bullish", "rebound", "mengkilap", "diburu",
-    "rekomendasi", "target", "optimis", "ekspansi", "dividen"
-]
+# POSITIVE_WORDS = [
+#     "naik", "menguat", "positif", "cuan", "untung", "laba", "melonjak",
+#     "tumbuh", "meningkat", "rekor", "prospek", "bagus", "cerah",
+#     "buy", "akumulasi", "bullish", "rebound", "mengkilap", "diburu",
+#     "rekomendasi", "target", "optimis", "ekspansi", "dividen"
+# ]
 
-NEGATIVE_WORDS = [
-    "turun", "melemah", "negatif", "rugi", "anjlok", "merosot",
-    "tertekan", "koreksi", "jatuh", "lesu", "beban", "risiko",
-    "sell", "hindari", "bearish", "jeblok", "ambrol", "tekanan",
-    "utang", "turunnya", "penurunan", "waspada"
-]
+# NEGATIVE_WORDS = [
+#     "turun", "melemah", "negatif", "rugi", "anjlok", "merosot",
+#     "tertekan", "koreksi", "jatuh", "lesu", "beban", "risiko",
+#     "sell", "hindari", "bearish", "jeblok", "ambrol", "tekanan",
+#     "utang", "turunnya", "penurunan", "waspada"
+# ]
 
 
-def get_sentiment_score(text):
-    text = str(text).lower()
+# def get_sentiment_score(text):
+#     text = str(text).lower()
 
-    pos_count = sum(1 for word in POSITIVE_WORDS if word in text)
-    neg_count = sum(1 for word in NEGATIVE_WORDS if word in text)
+#     pos_count = sum(1 for word in POSITIVE_WORDS if word in text)
+#     neg_count = sum(1 for word in NEGATIVE_WORDS if word in text)
 
-    raw_score = pos_count - neg_count
+#     raw_score = pos_count - neg_count
 
-    if raw_score > 0:
-        label = "Positive"
-        score = min(raw_score / 3, 1)
-    elif raw_score < 0:
-        label = "Negative"
-        score = max(raw_score / 3, -1)
-    else:
-        label = "Neutral"
-        score = 0
+#     if raw_score > 0:
+#         label = "Positive"
+#         score = min(raw_score / 3, 1)
+#     elif raw_score < 0:
+#         label = "Negative"
+#         score = max(raw_score / 3, -1)
+#     else:
+#         label = "Neutral"
+#         score = 0
 
-    return label, score
+#     return label, score
+
+
+# def apply_sentiment(news_df):
+#     if news_df.empty:
+#         return news_df, 0, "Neutral", 0
+
+#     sentiment_result = news_df["Title"].apply(get_sentiment_score)
+#     news_df["Sentiment_Label"] = sentiment_result.apply(lambda x: x[0])
+#     news_df["Sentiment_Score"] = sentiment_result.apply(lambda x: x[1])
+
+#     avg_score = news_df["Sentiment_Score"].mean()
+#     news_count = len(news_df)
+
+#     if avg_score > 0.1:
+#         label = "Positive"
+#     elif avg_score < -0.1:
+#         label = "Negative"
+#     else:
+#         label = "Neutral"
+
+#     return news_df, avg_score, label, news_count
+
+# ======================================================
+# LOAD MODEL INDOBERT (OTAK ASLI KAGGLE VIA HUGGINGFACE)
+# ======================================================
+import re
+import torch
+import numpy as np
+from transformers import pipeline
+import streamlit as st
+
+@st.cache_resource(ttl=3600)
+def load_indobert():
+    print("[*] Memuat Model IndoBERT ke RAM...")
+    return pipeline(
+        "text-classification",
+        model="mdhugol/indonesia-bert-sentiment-classification",
+        top_k=None,       # Wajib None biar semua prob (Pos/Neu/Neg) keluar
+        truncation=True,  # Potong teks > max_length agar tidak error/hang
+        max_length=128,   # BERT max sequence (cukup untuk judul berita)
+    )
+
+def bersihkan_teks(teks):
+    """
+    Preprocessing persis 100% kayak di pemodelan_nlp.ipynb.
+    
+    PENTING:
+    - Lowercase dulu SEBELUM regex lainnya (IndoBERT sensitif kapital)
+    - Pakai [^\w\s] bukan [^a-z\s] → angka tetap dipertahankan
+      (angka penting buat konteks saham, e.g. "naik 20%")
+    - Urutan operasi harus identik dengan notebook
+    """
+    # 1. Lowercase dulu
+    teks = str(teks).lower()
+    # 2. Hapus URL
+    teks = re.sub(r'http\S+|www\S+|https\S+', '', teks, flags=re.MULTILINE)
+    # 3. Hapus mention & hashtag
+    teks = re.sub(r'\@\w+|\#\w+', '', teks)
+    # 4. Hapus entitas HTML (&amp; dll)
+    teks = re.sub(r'&[a-z]+;', ' ', teks)
+    # 5. Hapus tanda baca — sisain angka (BUGFIX: was [^a-z\s] → angka ikut kebuang)
+    teks = re.sub(r'[^\w\s]', ' ', teks)
+    # 6. Collapse spasi ganda
+    teks = re.sub(r'\s+', ' ', teks).strip()
+    return teks
 
 
 def apply_sentiment(news_df):
+    """
+    Eksekusi NLP + Hybrid Lexicon + Agregasi Normalisasi Absolut buat Saham Individual
+    """
     if news_df.empty:
-        return news_df, 0, "Neutral", 0
+        return news_df, 0.0, "Neutral", 0
 
-    sentiment_result = news_df["Title"].apply(get_sentiment_score)
-    news_df["Sentiment_Label"] = sentiment_result.apply(lambda x: x[0])
-    news_df["Sentiment_Score"] = sentiment_result.apply(lambda x: x[1])
-
-    avg_score = news_df["Sentiment_Score"].mean()
-    news_count = len(news_df)
-
-    if avg_score > 0.1:
-        label = "Positive"
-    elif avg_score < -0.1:
-        label = "Negative"
+    indobert = load_indobert()
+    
+    list_prob_pos, list_prob_neu, list_prob_neg = [], [], []
+    
+    for judul in news_df["Title"]:
+        teks_bersih = bersihkan_teks(judul)
+        if not teks_bersih:
+            list_prob_pos.append(0.0)
+            list_prob_neu.append(1.0)
+            list_prob_neg.append(0.0)
+            continue
+            
+        hasil = indobert(teks_bersih)[0]
+        
+        # 1. TARIK PROBABILITAS MURNI INDOBERT
+        probs = {}
+        for x in hasil:
+            lbl = str(x['label']).lower().strip()
+            score = float(x['score'])
+            if lbl in ('positive', 'pos', 'label_0'):
+                probs['positive'] = score
+            elif lbl in ('neutral', 'neu', 'label_1'):
+                probs['neutral'] = score
+            elif lbl in ('negative', 'neg', 'label_2'):
+                probs['negative'] = score
+                
+        prob_pos = probs.get('positive', 0.0)
+        prob_neu = probs.get('neutral', 0.0)
+        prob_neg = probs.get('negative', 0.0)
+        
+        # 2. INJEKSI BOBOT LEXICON (HYBRID SYSTEM)
+        teks_lower = str(judul).lower()
+        ada_positif = any(kata in teks_lower for kata in MARKET_POSITIVE_WORDS)
+        ada_negatif = any(kata in teks_lower for kata in MARKET_ENGATIVE_WORDS)
+        
+        # Kalau IndoBERT ngasih Netral > 50%, tapi ada kata kunci finansial, kita paksa geser!
+        if ada_negatif and not ada_positif:
+            # Bajak 70% probabilitas netral, lempar ke negatif
+            prob_neg += (prob_neu * 0.7)
+            prob_neu *= 0.3
+        elif ada_positif and not ada_negatif:
+            # Bajak 70% probabilitas netral, lempar ke positif
+            prob_pos += (prob_neu * 0.7)
+            prob_neu *= 0.3
+            
+        # Normalisasi ulang biar totalnya tetap 1.0 (Matematikanya tetep valid)
+        total_prob = prob_pos + prob_neu + prob_neg
+        prob_pos /= total_prob
+        prob_neu /= total_prob
+        prob_neg /= total_prob
+                
+        list_prob_pos.append(prob_pos)
+        list_prob_neu.append(prob_neu)
+        list_prob_neg.append(prob_neg)
+        
+    news_df = news_df.copy()
+    news_df['Prob_Positif'] = list_prob_pos
+    news_df['Prob_Netral'] = list_prob_neu
+    news_df['Prob_Negatif'] = list_prob_neg
+    
+    # 3. AGREGASI / GROUPING HARIAN
+    tanggal_col = "Tanggal" if "Tanggal" in news_df.columns else "Date"
+    df_harian = news_df.groupby(tanggal_col).agg(
+        Total_Berita=('Title', 'count'),
+        Avg_Prob_Positif=('Prob_Positif', 'mean'),
+        Avg_Prob_Netral=('Prob_Netral', 'mean'),
+        Avg_Prob_Negatif=('Prob_Negatif', 'mean'),
+    ).reset_index()
+    
+    # 4. KOREKSI NORMALISASI ABSOLUT AKHIR
+    total_prob_harian = df_harian['Avg_Prob_Positif'] + df_harian['Avg_Prob_Netral'] + df_harian['Avg_Prob_Negatif']
+    df_harian['Avg_Prob_Positif'] = np.where(total_prob_harian > 0, df_harian['Avg_Prob_Positif'] / total_prob_harian, 0)
+    df_harian['Avg_Prob_Netral'] = np.where(total_prob_harian > 0, df_harian['Avg_Prob_Netral'] / total_prob_harian, 0)
+    df_harian['Avg_Prob_Negatif'] = np.where(total_prob_harian > 0, df_harian['Avg_Prob_Negatif'] / total_prob_harian, 0)
+    
+    # 5. SKOR TUNGGAL
+    df_harian['Skor_Sentimen_Final'] = df_harian['Avg_Prob_Positif'] - df_harian['Avg_Prob_Negatif']
+    df_harian = df_harian.sort_values(tanggal_col, ascending=False).reset_index(drop=True)
+    
+    skor_final = float(df_harian.iloc[0]['Skor_Sentimen_Final'])
+    
+    if skor_final > 0.02:
+        label_final = "Positive"
+    elif skor_final < -0.02:
+        label_final = "Negative"
     else:
-        label = "Neutral"
+        label_final = "Neutral"
 
-    return news_df, avg_score, label, news_count
+    # Hiasan Tabel UI (Biar warna sentimennya sesuai per baris)
+    news_df["Sentiment_Score"] = news_df['Prob_Positif'] - news_df['Prob_Negatif']
+    news_df["Sentiment_Label"] = np.where(news_df["Sentiment_Score"] > 0.02, "Positive",
+                                 np.where(news_df["Sentiment_Score"] < -0.02, "Negative", "Neutral"))
 
+    return news_df, skor_final, label_final, len(news_df)
 
 # ======================================================
 # MARKET NEWS & TRENDS LOGIC
@@ -784,10 +934,14 @@ def fetch_market_news(category="Semua Berita"):
         
         limit_per_kw = 5 if category == "Semua Berita" else 15 
         for entry in feed.entries[:limit_per_kw]:
+            judul_kotor = entry.title if "title" in entry else ""
+            # Buang nama portal di akhir judul (e.g. " - CNBC Indonesia")
+            # agar tidak menambah noise ke model NLP
+            judul_bersih = judul_kotor.rsplit(" - ", 1)[0] if " - " in judul_kotor else judul_kotor
             news_items.append({
                 "Keyword": keyword,
                 "Category": category if category != "Semua Berita" else next((k for k, v in MARKET_NEWS_CATEGORIES.items() if keyword in v), "Umum"),
-                "Title": entry.title if "title" in entry else "",
+                "Title": judul_bersih,
                 "Published": entry.published if "published" in entry else None,
                 "Source": entry.source.title if "source" in entry else "Google News",
                 "Link": entry.link if "link" in entry else ""
@@ -806,35 +960,124 @@ def fetch_market_news(category="Semua Berita"):
     
     return news_df.head(50)
 
-def apply_market_sentiment(news_df):
-    if news_df.empty:
-        return news_df, 0, "Neutral Market"
+# def apply_market_sentiment(news_df):
+#     if news_df.empty:
+#         return news_df, 0, "Neutral Market"
 
-    def score_market(text):
-        text = str(text).lower()
-        pos_count = sum(1 for word in MARKET_POSITIVE_WORDS if word in text)
-        neg_count = sum(1 for word in MARKET_NEGATIVE_WORDS if word in text)
+#     def score_market(text):
+#         text = str(text).lower()
+#         pos_count = sum(1 for word in MARKET_POSITIVE_WORDS if word in text)
+#         neg_count = sum(1 for word in MARKET_NEGATIVE_WORDS if word in text)
         
-        raw_score = pos_count - neg_count
-        if raw_score > 0:
-            return "Positive", min(raw_score / 3, 1)
-        elif raw_score < 0:
-            return "Negative", max(raw_score / 3, -1)
-        return "Neutral", 0
+#         raw_score = pos_count - neg_count
+#         if raw_score > 0:
+#             return "Positive", min(raw_score / 3, 1)
+#         elif raw_score < 0:
+#             return "Negative", max(raw_score / 3, -1)
+#         return "Neutral", 0
 
-    sentiment_result = news_df["Title"].apply(score_market)
-    news_df["Sentiment_Label"] = sentiment_result.apply(lambda x: x[0])
-    news_df["Sentiment_Score"] = sentiment_result.apply(lambda x: x[1])
+#     sentiment_result = news_df["Title"].apply(score_market)
+#     news_df["Sentiment_Label"] = sentiment_result.apply(lambda x: x[0])
+#     news_df["Sentiment_Score"] = sentiment_result.apply(lambda x: x[1])
 
-    avg_score = news_df["Sentiment_Score"].mean()
-    if avg_score > 0.05:
-        label = "Positive Market"
-    elif avg_score < -0.05:
-        label = "Negative Market"
+#     avg_score = news_df["Sentiment_Score"].mean()
+#     if avg_score > 0.05:
+#         label = "Positive Market"
+#     elif avg_score < -0.05:
+#         label = "Negative Market"
+#     else:
+#         label = "Neutral Market"
+
+#     return news_df, avg_score, label
+
+
+def apply_market_sentiment(news_df):
+    """
+    Eksekusi NLP + Hybrid Lexicon + Agregasi Normalisasi Absolut buat Market News Global
+    """
+    if news_df.empty:
+        return news_df, 0.0, "Neutral Market"
+
+    indobert = load_indobert()
+    
+    list_prob_pos, list_prob_neu, list_prob_neg = [], [], []
+    
+    for judul in news_df["Title"]:
+        teks_bersih = bersihkan_teks(judul)
+        if not teks_bersih:
+            list_prob_pos.append(0.0)
+            list_prob_neu.append(1.0)
+            list_prob_neg.append(0.0)
+            continue
+            
+        hasil = indobert(teks_bersih)[0]
+        
+        probs = {}
+        for x in hasil:
+            lbl = str(x['label']).lower().strip()
+            score = float(x['score'])
+            if lbl in ('positive', 'pos', 'label_0'):
+                probs['positive'] = score
+            elif lbl in ('neutral', 'neu', 'label_1'):
+                probs['neutral'] = score
+            elif lbl in ('negative', 'neg', 'label_2'):
+                probs['negative'] = score
+                
+        prob_pos = probs.get('positive', 0.0)
+        prob_neu = probs.get('neutral', 0.0)
+        prob_neg = probs.get('negative', 0.0)
+        
+        # INJEKSI BOBOT LEXICON
+        teks_lower = str(judul).lower()
+        ada_positif = any(kata in teks_lower for kata in MARKET_POSITIVE_WORDS)
+        ada_negatif = any(kata in teks_lower for kata in MARKET_NEGATIVE_WORDS)
+        
+        if ada_negatif and not ada_positif:
+            prob_neg += (prob_neu * 0.7)
+            prob_neu *= 0.3
+        elif ada_positif and not ada_negatif:
+            prob_pos += (prob_neu * 0.7)
+            prob_neu *= 0.3
+            
+        total_prob = prob_pos + prob_neu + prob_neg
+        prob_pos /= total_prob
+        prob_neu /= total_prob
+        prob_neg /= total_prob
+                
+        list_prob_pos.append(prob_pos)
+        list_prob_neu.append(prob_neu)
+        list_prob_neg.append(prob_neg)
+        
+    news_df = news_df.copy()
+    news_df['Prob_Positif'] = list_prob_pos
+    news_df['Prob_Netral'] = list_prob_neu
+    news_df['Prob_Negatif'] = list_prob_neg
+    
+    avg_prob_pos = news_df['Prob_Positif'].mean()
+    avg_prob_neu = news_df['Prob_Netral'].mean()
+    avg_prob_neg = news_df['Prob_Negatif'].mean()
+    
+    total_prob_global = avg_prob_pos + avg_prob_neu + avg_prob_neg
+    if total_prob_global > 0:
+        avg_prob_pos /= total_prob_global
+        avg_prob_neu /= total_prob_global
+        avg_prob_neg /= total_prob_global
+    
+    skor_final = avg_prob_pos - avg_prob_neg
+    
+    if skor_final > 0.02:
+        label_final = "Positive Market"
+    elif skor_final < -0.02:
+        label_final = "Negative Market"
     else:
-        label = "Neutral Market"
+        label_final = "Neutral Market"
 
-    return news_df, avg_score, label
+    news_df["Sentiment_Score"] = news_df['Prob_Positif'] - news_df['Prob_Negatif']
+    news_df["Sentiment_Label"] = np.where(news_df["Sentiment_Score"] > 0.02, "Positive",
+                                 np.where(news_df["Sentiment_Score"] < -0.02, "Negative", "Neutral"))
+
+    return news_df, float(skor_final), label_final
+
 
 def get_trending_topics(news_df):
     if news_df.empty:
@@ -1438,8 +1681,6 @@ def generate_watchlist():
             # INJEKSI DATA KAGGLE
             data = KAGGLE_PILAR_DATA.get(ticker_name)
             if data:
-                avg_score = data["sentiment_score"]
-                sentiment_label = "Positive" if avg_score > 0 else "Negative" if avg_score < 0 else "Neutral"
                 fund_dict["Composite_Rank"] = data["piotroski_fuzzy"]
             
             fundamental_score = fund_dict.get("Composite_Rank", 0)
@@ -1948,8 +2189,6 @@ with st.spinner("Sedang mengambil data terbaru dan menjalankan analisis..."):
         # INJEKSI DATA KAGGLE
         data = KAGGLE_PILAR_DATA.get(selected_ticker)
         if data:
-            avg_sentiment_score = data["sentiment_score"]
-            sentiment_label = "Positive" if avg_sentiment_score > 0 else "Negative" if avg_sentiment_score < 0 else "Neutral"
             fundamental_row["Composite_Rank"] = data["piotroski_fuzzy"]
 
         latest_row = prepare_latest_row(
