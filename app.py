@@ -850,7 +850,7 @@ def apply_sentiment(news_df):
         # 2. INJEKSI BOBOT LEXICON (HYBRID SYSTEM)
         teks_lower = str(judul).lower()
         ada_positif = any(kata in teks_lower for kata in MARKET_POSITIVE_WORDS)
-        ada_negatif = any(kata in teks_lower for kata in MARKET_ENGATIVE_WORDS)
+        ada_negatif = any(kata in teks_lower for kata in MARKET_NEGATIVE_WORDS)
         
         # Kalau IndoBERT ngasih Netral > 50%, tapi ada kata kunci finansial, kita paksa geser!
         if ada_negatif and not ada_positif:
@@ -1166,10 +1166,6 @@ from skfuzzy import control as ctrl
 
 @st.cache_data(ttl=60)
 def ambil_data_asli_kaggle():
-    """
-    Fungsi ini ngebaca langsung file CSV hasil model AI lu di Kaggle kemarin.
-    100% Data Asli, siap disidangkan!
-    """
     data_dinamis = {}
     
     # 1. Buka harta karun Pilar 3 (Fundamental Piotroski & Graham)
