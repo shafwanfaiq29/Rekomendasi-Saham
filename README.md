@@ -53,3 +53,9 @@ Agar model ML dan NLP berfungsi tanpa memicu sistem *fallback* (rule-based), And
    streamlit run app.py
 
 ```
+
+## Repository Terbaru
+
+Repository ini merupakan versi awal dari proyek Rekomendasi Saham.
+Pengembangan lanjutan dari proyek ini dapat diakses melalui repository berikut:
+[RekomendasiSahamV2](https://github.com/shafwanfaiq29/RekomendasiSahamV2.git)
